@@ -51,6 +51,7 @@ core
 
 # OS Images and Build Artifacts (Phase 2)
 /os/build/
+/os/build_real/
 *.img
 *.iso
 *.squashfs
