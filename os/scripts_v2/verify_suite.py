@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-BHOOT Phase 2A.3 - Forensic Verification Suite & Artifact Manifest Generator
-Performs rigorous cryptographic and structural verification of all Phase 2A.3 OS artifacts.
+BHOOT Phase 2A.4 - Forensic Verification Suite & Artifact Manifest Generator
+Performs rigorous cryptographic and structural verification of all Phase 2A.4 OS artifacts.
 """
 
 import hashlib
@@ -46,7 +46,7 @@ def hash_file(path: str, max_bytes: int = None) -> str:
     return h.hexdigest()
 
 print("=" * 72)
-print(" [Phase 2A.3 - Step 07] Forensic Verification Suite & Manifest")
+print(" [Phase 2A.4 - Step 07] Forensic Verification Suite & Manifest")
 print("=" * 72)
 
 # -----------------------------------------------------------------------------
@@ -331,7 +331,7 @@ artifacts_meta = [
 
 manifest_data = {
     "project": "BHOOT",
-    "phase": "2A.3",
+    "phase": "2A.4",
     "target_platform": "Dedicated Bootable USB (UEFI x86_64)",
     "base_distribution": "Debian 12 Bookworm amd64",
     "kernel": "Linux 6.1.0-50-amd64",
