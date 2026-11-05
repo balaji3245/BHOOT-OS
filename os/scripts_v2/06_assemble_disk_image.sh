@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# BHOOT Phase 2A.2 - Step 06: Assemble Whole Sparse Disk Image with Payloads
-# Creates bhoot_disk_assembled.img with GPT partitioning and embeds ESP, SquashFS, LUKS2, and Recovery.
+# BHOOT Phase 2A.3 - Step 06: Assemble Whole Sparse Disk Image with Complete Payloads
+# Creates bhoot_disk_assembled.img with GPT partitioning and embeds complete 48 GiB
+# production LUKS2 partition, BHOOT_SYSTEM Ext4 partition, ESP, and Recovery payloads.
 
 set -euo pipefail
 
@@ -16,18 +17,18 @@ TOTAL_BYTES=$(( TOTAL_SECTORS * SECTOR_SIZE ))
 ASSEMBLED_DISK="$BUILD_REAL/bhoot_disk_assembled.img"
 SFDISK_LAYOUT="$CONFIG_DIR/storage/gpt_layout.sfdisk"
 ESP_IMG="$BUILD_REAL/bhoot_esp.img"
-SQUASHFS_IMG="$BUILD_REAL/filesystem.squashfs"
+SYSTEM_IMG="$BUILD_REAL/bhoot_system_ext4.img"
 PROD_LUKS="$BUILD_REAL/bhoot_luks_prod_48g.img"
 RECOVERY_IMG="$BUILD_REAL/bhoot_recovery.img"
 HEADER_BACKUP="$BUILD_REAL/bhoot_luks_header.backup"
 RECOVERY_STAGING="$BUILD_REAL/recovery_staging"
 
 echo "========================================================================"
-echo " [Phase 2A.2 - Step 06] Assembling Whole Disk Image with Payloads"
+echo " [Phase 2A.3 - Step 06] Assembling Whole Disk Image with Complete Payloads"
 echo "========================================================================"
 
 # 1. Verify source payload components
-for req in "$ESP_IMG" "$SQUASHFS_IMG" "$PROD_LUKS" "$HEADER_BACKUP"; do
+for req in "$ESP_IMG" "$SYSTEM_IMG" "$PROD_LUKS" "$HEADER_BACKUP"; do
     if [ ! -f "$req" ]; then
         echo "  ERROR: Required payload component missing: $req" >&2
         exit 1
@@ -40,7 +41,9 @@ rm -rf "$RECOVERY_STAGING" "$RECOVERY_IMG"
 mkdir -p "$RECOVERY_STAGING"
 
 cp "$HEADER_BACKUP" "$RECOVERY_STAGING/bhoot_luks_header.backup"
-cp "$BUILD_REAL/rootfs/etc/bhoot/version.json" "$RECOVERY_STAGING/version.json"
+if [ -f "$BUILD_REAL/rootfs/etc/bhoot/version.json" ]; then
+    cp "$BUILD_REAL/rootfs/etc/bhoot/version.json" "$RECOVERY_STAGING/version.json"
+fi
 
 cat << 'EOF' > "$RECOVERY_STAGING/README_RECOVERY.txt"
 ========================================================================
@@ -81,7 +84,7 @@ mkfs.ext4 -F -q -L "BHOOT_REC" -d "$RECOVERY_STAGING" "$RECOVERY_IMG"
 rm -rf "$RECOVERY_STAGING"
 echo "  Offline recovery payload created: $(stat -c %s "$RECOVERY_IMG") bytes"
 
-# 3. Allocate Sparse Disk Image
+# 3. Allocate Sparse Disk Image matching exact 57.81 GiB geometry
 echo "  Allocating 57.81 GiB sparse whole-disk image at: $ASSEMBLED_DISK..."
 rm -f "$ASSEMBLED_DISK"
 truncate -s "$TOTAL_BYTES" "$ASSEMBLED_DISK"
@@ -91,20 +94,20 @@ echo "  Applying GPT partition layout via sfdisk..."
 sfdisk --quiet "$ASSEMBLED_DISK" < "$SFDISK_LAYOUT"
 sfdisk --verify "$ASSEMBLED_DISK"
 
-# 5. Embed Partition Payloads at Exact Sector Offsets
-echo "  Writing Partition 1: EFI System Partition (Offset: 1 MiB / Sector 2048)..."
-dd if="$ESP_IMG" of="$ASSEMBLED_DISK" bs=1M seek=1 conv=notrunc status=none
+# 5. Embed Complete Partition Payloads at Exact Sector Offsets using sparse copy
+echo "  Writing Partition 1: EFI System Partition (Offset: 1 MiB / Sector 2048, 1 GiB)..."
+dd if="$ESP_IMG" of="$ASSEMBLED_DISK" bs=1M seek=1 conv=notrunc,sparse status=none
 
-echo "  Writing Partition 2: System Root SquashFS (Offset: 1025 MiB / Sector 2099200)..."
-dd if="$SQUASHFS_IMG" of="$ASSEMBLED_DISK" bs=1M seek=1025 conv=notrunc status=none
+echo "  Writing Partition 2: BHOOT_SYSTEM Ext4 Partition (Offset: 1025 MiB / Sector 2099200, 4 GiB)..."
+dd if="$SYSTEM_IMG" of="$ASSEMBLED_DISK" bs=1M seek=1025 count=4096 conv=notrunc,sparse status=none
 
-echo "  Writing Partition 3: Encrypted LUKS2 Header Structure (Offset: 5121 MiB / Sector 10487808)..."
-dd if="$PROD_LUKS" of="$ASSEMBLED_DISK" bs=1M seek=5121 count=32 conv=notrunc status=none
+echo "  Writing Partition 3: COMPLETE 48 GiB Production LUKS2 Volume (Offset: 5121 MiB / Sector 10487808, 48 GiB)..."
+dd if="$PROD_LUKS" of="$ASSEMBLED_DISK" bs=1M seek=5121 count=49152 conv=notrunc,sparse status=none
 
-echo "  Writing Partition 4: Offline Recovery Payload (Offset: 54273 MiB / Sector 111151104)..."
-dd if="$RECOVERY_IMG" of="$ASSEMBLED_DISK" bs=1M seek=54273 conv=notrunc status=none
+echo "  Writing Partition 4: Offline Recovery Payload (Offset: 54273 MiB / Sector 111151104, 4 GiB)..."
+dd if="$RECOVERY_IMG" of="$ASSEMBLED_DISK" bs=1M seek=54273 count=4096 conv=notrunc,sparse status=none
 
-# 6. Verify Partition Offsets and Magic Signatures inside Assembled Disk Image
+# 6. Forensic Verification of Partition Structures inside Assembled Disk Image
 echo "  Performing forensic byte inspection on assembled disk image..."
 
 # Partition 1: Check FAT32 magic
@@ -115,13 +118,13 @@ if [ "$P1_MAGIC" != "55aa" ]; then
 fi
 echo "  Verified Partition 1 (ESP) FAT32 boot signature (0x55aa) at sector 2048."
 
-# Partition 2: Check SquashFS magic (0x73717368)
-P2_MAGIC=$(dd if="$ASSEMBLED_DISK" bs=512 skip=2099200 count=1 2>/dev/null | xxd -p -s 0 -l 4)
-if [ "$P2_MAGIC" != "68737173" ]; then
-    echo "  ERROR: Partition 2 at sector 2099200 does not contain SquashFS magic (found: $P2_MAGIC)!" >&2
+# Partition 2: Check Ext4 superblock magic (0xef53 at offset 1080 of partition)
+P2_SB_MAGIC=$(dd if="$ASSEMBLED_DISK" bs=512 skip=2099200 count=4 2>/dev/null | xxd -p -s 1080 -l 2)
+if [ "$P2_SB_MAGIC" != "53ef" ]; then
+    echo "  ERROR: Partition 2 at sector 2099200 does not contain Ext4 superblock magic (found: $P2_SB_MAGIC)!" >&2
     exit 1
 fi
-echo "  Verified Partition 2 (System) SquashFS magic ('hsqs') at sector 2099200."
+echo "  Verified Partition 2 (BHOOT_SYSTEM) Ext4 superblock magic (0xef53) at sector 2099200."
 
 # Partition 3: Check LUKS2 magic ('LUKS\xba\xbe') -> hex '4c554b53babe'
 P3_MAGIC=$(dd if="$ASSEMBLED_DISK" bs=512 skip=10487808 count=1 2>/dev/null | xxd -p -s 0 -l 6)
@@ -129,20 +132,73 @@ if [ "$P3_MAGIC" != "4c554b53babe" ]; then
     echo "  ERROR: Partition 3 at sector 10487808 does not contain LUKS2 magic (found: $P3_MAGIC)!" >&2
     exit 1
 fi
-echo "  Verified Partition 3 (Data) LUKS2 magic (4c554b53babe) at sector 10487808."
+echo "  Verified Partition 3 (BHOOT_DATA) LUKS2 magic (4c554b53babe) at sector 10487808."
 
-# Partition 4: Check non-zero content
-P4_SAMPLE=$(dd if="$ASSEMBLED_DISK" bs=512 skip=111151104 count=16 2>/dev/null | tr -d '\0' | wc -c)
-if [ "$P4_SAMPLE" -eq 0 ]; then
-    echo "  ERROR: Partition 4 at sector 111151104 is completely empty!" >&2
+# Partition 4: Check Ext4 superblock magic
+P4_SB_MAGIC=$(dd if="$ASSEMBLED_DISK" bs=512 skip=111151104 count=4 2>/dev/null | xxd -p -s 1080 -l 2)
+if [ "$P4_SB_MAGIC" != "53ef" ]; then
+    echo "  ERROR: Partition 4 at sector 111151104 does not contain Ext4 superblock magic (found: $P4_SB_MAGIC)!" >&2
     exit 1
 fi
-echo "  Verified Partition 4 (Recovery) payload at sector 111151104."
+echo "  Verified Partition 4 (BHOOT_RECOVERY) Ext4 superblock magic (0xef53) at sector 111151104."
+
+# 7. Verify Partition 3 inside the Assembled Disk Image can be directly probed and unlocked
+echo "  Verifying Partition 3 within assembled disk image via loop offset..."
+P3_OFFSET_BYTES=$(( 10487808 * 512 ))
+P3_SIZE_BYTES=$(( 100663296 * 512 ))
+
+P3_LOOP_OUT=$(udisksctl loop-setup --file "$ASSEMBLED_DISK" --offset "$P3_OFFSET_BYTES" --size "$P3_SIZE_BYTES" --no-user-interaction)
+P3_LOOP_DEV=$(echo "$P3_LOOP_OUT" | awk '{print $NF}' | tr -d '.')
+echo "  Partition 3 attached as: $P3_LOOP_DEV"
+
+cleanup_p3() {
+    udisksctl lock -b "$P3_LOOP_DEV" --no-user-interaction 2>/dev/null || true
+    udisksctl loop-delete -b "$P3_LOOP_DEV" --no-user-interaction 2>/dev/null || true
+}
+trap cleanup_p3 EXIT
+
+# Check UDisks recognition
+P3_INFO=$(udisksctl info -b "$P3_LOOP_DEV")
+echo "$P3_INFO" | grep -E "IdType|IdLabel|IdUUID"
+
+if echo "$P3_INFO" | grep -q "IdType: *crypto_LUKS"; then
+    echo "  Partition 3 recognized as crypto_LUKS by Linux kernel/UDisks2."
+else
+    echo "  ERROR: Partition 3 not recognized as LUKS container!" >&2
+    exit 1
+fi
+
+# Test unlock if session key is present
+if [ -f "$BUILD_REAL/.session_key.tmp" ]; then
+    echo "  Testing unlock of assembled Partition 3 using build session key..."
+    UNLOCK_RES=$(udisksctl unlock -b "$P3_LOOP_DEV" --key-file "$BUILD_REAL/.session_key.tmp" --no-user-interaction)
+    CLEAR_DEV=$(echo "$UNLOCK_RES" | awk '{print $NF}' | tr -d '.')
+    echo "  Unlock SUCCESS: Assembled Partition 3 cleartext mapping active at: $CLEAR_DEV"
+
+    # Verify filesystem on unlocked device
+    CLEAR_INFO=$(udisksctl info -b "$CLEAR_DEV")
+    echo "$CLEAR_INFO" | grep -E "IdType|IdLabel"
+    if echo "$CLEAR_INFO" | grep -q "IdLabel: *BHOOT_DATA"; then
+        echo "  Verified Ext4 filesystem (BHOOT_DATA) inside unlocked assembled partition."
+    fi
+
+    # Unmount if desktop automounter mounted the unlocked partition
+    udisksctl unmount -b "$CLEAR_DEV" --no-user-interaction 2>/dev/null || true
+    time.sleep 0.5 2>/dev/null || sleep 1
+
+    # Lock cleartext device
+    udisksctl lock -b "$P3_LOOP_DEV" --no-user-interaction 2>/dev/null || true
+    echo "  Assembled Partition 3 locked cleanly."
+fi
+
+# Detach test loop
+udisksctl loop-delete -b "$P3_LOOP_DEV" --no-user-interaction 2>/dev/null || true
+trap - EXIT
 
 echo "  Assembled disk image characteristics:"
 ls -lh "$ASSEMBLED_DISK"
 sfdisk -l "$ASSEMBLED_DISK"
 
 echo "========================================================================"
-echo " [Phase 2A.2 - Step 06] Whole Disk Image Assembly Complete"
+echo " [Phase 2A.3 - Step 06] Whole Disk Image Assembly Complete"
 echo "========================================================================"

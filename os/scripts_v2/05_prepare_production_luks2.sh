@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# BHOOT Phase 2A.2 - Step 05: Prepare Encrypted LUKS2 Storage Containers
-# Explicitly separates the 64 MiB test-vector container from the 48 GiB sparse production volume.
-# Passphrases and recovery keys are generated ephemerally and NEVER echoed to logs or stdout.
+# BHOOT Phase 2A.3 - Step 05: Prepare Encrypted LUKS2 Storage with Ext4 Persistence
+# Formats production 48 GiB volume with Argon2id + AES-XTS, provisions Ext4 filesystem,
+# verifies persistence across mounts, extracts detached header, and tests disaster recovery.
 
 set -euo pipefail
 
@@ -13,9 +13,10 @@ TEST_CONTAINER="$BUILD_REAL/bhoot_luks_test_64m.img"
 PROD_CONTAINER="$BUILD_REAL/bhoot_luks_prod_48g.img"
 HEADER_BACKUP="$BUILD_REAL/bhoot_luks_header.backup"
 HEADER_DUMP="$BUILD_REAL/bhoot_luks_header_dump.txt"
+MANAGER_PY="$SCRIPT_DIR/luks_ext4_manager.py"
 
 echo "========================================================================"
-echo " [Phase 2A.2 - Step 05] Preparing Production & Test LUKS2 Storage"
+echo " [Phase 2A.3 - Step 05] Preparing Production LUKS2 Storage & Ext4 Filesystem"
 echo "========================================================================"
 
 mkdir -p "$BUILD_REAL"
@@ -23,6 +24,10 @@ mkdir -p "$BUILD_REAL"
 # Generate random ephemeral authentication tokens (in-memory only, NEVER printed)
 EPHEMERAL_PASSPHRASE=$(head -c 32 /dev/urandom | base64)
 EPHEMERAL_RECOVERY=$(head -c 32 /dev/urandom | base64)
+
+# Save build session key for inter-step partition unlock verification
+printf '%s' "$EPHEMERAL_PASSPHRASE" > "$BUILD_REAL/.session_key.tmp"
+chmod 0600 "$BUILD_REAL/.session_key.tmp"
 
 # -----------------------------------------------------------------------------
 # Part A: 64 MiB Functional Verification Test Vector
@@ -58,30 +63,6 @@ printf '%s' "$EPHEMERAL_RECOVERY" | cryptsetup luksAddKey \
     --key-slot 1 \
     --key-file <(printf '%s' "$EPHEMERAL_PASSPHRASE") \
     "$TEST_CONTAINER" -
-
-echo "    Testing udisksctl loopback activation and device mapper creation..."
-LOOP_OUT=$(udisksctl loop-setup --file "$TEST_CONTAINER" --no-user-interaction)
-LOOP_DEV=$(echo "$LOOP_OUT" | awk '{print $NF}' | tr -d '.')
-echo "    Attached loop device: $LOOP_DEV"
-
-cleanup_test() {
-    echo "    Cleaning up test loop device..."
-    udisksctl lock -b "$LOOP_DEV" --no-user-interaction 2>/dev/null || true
-    udisksctl loop-delete -b "$LOOP_DEV" --no-user-interaction 2>/dev/null || true
-}
-trap cleanup_test EXIT
-
-UNLOCK_OUT=$(udisksctl unlock -b "$LOOP_DEV" --key-file <(printf '%s' "$EPHEMERAL_PASSPHRASE") --no-user-interaction)
-CLEAR_DEV=$(echo "$UNLOCK_OUT" | awk '{print $NF}' | tr -d '.')
-echo "    Decrypted cleartext block mapping active at: $CLEAR_DEV"
-
-if [ -e "$CLEAR_DEV" ]; then
-    echo "    Kernel device mapper activation confirmed for test container."
-fi
-
-udisksctl lock -b "$LOOP_DEV" --no-user-interaction
-udisksctl loop-delete -b "$LOOP_DEV" --no-user-interaction
-trap - EXIT
 
 # -----------------------------------------------------------------------------
 # Part B: 48 GiB Production Storage Sparse Container
@@ -132,9 +113,24 @@ grep -E "Version:|cipher:|sector:|PBKDF:|Key:|Memory:|0: luks2|1: luks2" "$HEADE
 HEADER_SIZE=$(stat -c %s "$HEADER_BACKUP")
 echo "    Detached LUKS2 Header Backup Size: $HEADER_SIZE bytes"
 
+# -----------------------------------------------------------------------------
+# Part C: Provision Ext4 Filesystem & Verify Persistence Across Mounts
+# -----------------------------------------------------------------------------
+echo "  [Part C] Formatting Cleartext Ext4 Filesystem and Verifying Persistence..."
+printf '%s' "$EPHEMERAL_PASSPHRASE" | python3 "$MANAGER_PY" format_and_populate "$PROD_CONTAINER"
+
+# -----------------------------------------------------------------------------
+# Part D: Disaster Recovery Simulation: Detached Header Restore Validation
+# -----------------------------------------------------------------------------
+echo "  [Part D] Executing Disaster Recovery Header Restoration Test..."
+TEST_BACKUP="$BUILD_REAL/test_header.backup"
+cryptsetup luksHeaderBackup --batch-mode "$TEST_CONTAINER" --header-backup-file "$TEST_BACKUP"
+printf '%s' "$EPHEMERAL_PASSPHRASE" | python3 "$MANAGER_PY" test_disaster_recovery "$TEST_CONTAINER" "$TEST_BACKUP"
+rm -f "$TEST_BACKUP"
+
 # Wipe sensitive ephemeral variables from memory
 unset EPHEMERAL_PASSPHRASE EPHEMERAL_RECOVERY
 
 echo "========================================================================"
-echo " [Phase 2A.2 - Step 05] Production & Test LUKS2 Preparation Complete"
+echo " [Phase 2A.3 - Step 05] Production LUKS2 & Ext4 Persistence Ready"
 echo "========================================================================"

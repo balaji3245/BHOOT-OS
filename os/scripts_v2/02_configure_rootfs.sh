@@ -114,3 +114,4 @@ chmod 0644 "$ROOTFS/etc/bhoot/version.json"
 echo "========================================================================"
 echo " [Phase 2A.2 - Step 02] RootFS Hardening and Configuration Complete"
 echo "========================================================================"
+

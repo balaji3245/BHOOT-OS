@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-BHOOT Phase 2A.2 - Forensic Verification Suite & Artifact Manifest Generator
-Performs rigorous cryptographic and structural verification of all Phase 2A.2 OS artifacts.
+BHOOT Phase 2A.3 - Forensic Verification Suite & Artifact Manifest Generator
+Performs rigorous cryptographic and structural verification of all Phase 2A.3 OS artifacts.
 """
 
 import hashlib
@@ -46,7 +46,7 @@ def hash_file(path: str, max_bytes: int = None) -> str:
     return h.hexdigest()
 
 print("=" * 72)
-print(" [Phase 2A.2 - Step 07] Forensic Verification Suite & Manifest")
+print(" [Phase 2A.3 - Step 07] Forensic Verification Suite & Manifest")
 print("=" * 72)
 
 # -----------------------------------------------------------------------------
@@ -87,6 +87,7 @@ if os.path.isfile(initrd_path):
 
     res = subprocess.run(["lsinitramfs", initrd_path], capture_output=True, text=True)
     check("Initramfs contains live-boot framework hooks", "scripts/live" in res.stdout or "live" in res.stdout)
+    check("Initramfs contains BHOOT dedicated discovery hook", "9991-bhoot-discovery" in res.stdout)
     check("Initramfs contains cryptsetup userspace binary", "cryptsetup" in res.stdout)
     check("Initramfs contains dm-crypt kernel module", "dm-crypt" in res.stdout or "aesni" in res.stdout)
 else:
@@ -113,6 +114,26 @@ if os.path.isfile(squashfs_path):
     check("SquashFS contains rfkill (/usr/sbin/rfkill)", "usr/sbin/rfkill" in res.stdout)
 else:
     check("SquashFS image exists", False, f"File not found: {squashfs_path}")
+
+# -----------------------------------------------------------------------------
+# 3B. BHOOT_SYSTEM Ext4 Partition Image Verification
+# -----------------------------------------------------------------------------
+print("\n--- 3B. BHOOT_SYSTEM Ext4 Partition Image Verification ---")
+sys_ext4_path = os.path.join(BUILD_REAL, "bhoot_system_ext4.img")
+if os.path.isfile(sys_ext4_path):
+    sys_size = os.path.getsize(sys_ext4_path)
+    check("BHOOT_SYSTEM Ext4 image size is exactly 4 GiB", sys_size == 4294967296, f"{sys_size} bytes")
+
+    with open(sys_ext4_path, "rb") as f:
+        f.seek(1080)
+        magic = f.read(2)
+        check("BHOOT_SYSTEM has valid Ext4 superblock magic (0xef53)", magic == b"\x53\xef", f"Found: {magic.hex()}")
+
+    tune_res = subprocess.run(["tune2fs", "-l", sys_ext4_path], capture_output=True, text=True)
+    check("BHOOT_SYSTEM volume label is BHOOT_SYSTEM", "BHOOT_SYSTEM" in tune_res.stdout)
+    check("BHOOT_SYSTEM UUID is b8007001-0002-4000-8000-000000000002", "b8007001-0002-4000-8000-000000000002" in tune_res.stdout)
+else:
+    check("BHOOT_SYSTEM Ext4 image exists", False)
 
 # -----------------------------------------------------------------------------
 # 4. EFI System Partition & Bootloader Verification
@@ -182,19 +203,20 @@ if os.path.isfile(disk_path):
         check("Partition 1 (ESP) FAT32 boot signature (0x55aa) at sector 2048", p1_sig == b"\x55\xaa", f"Found: {p1_sig.hex()}")
 
         # Partition 2: Sector 2099200 (offset 1,074,790,400)
-        f.seek(2099200 * 512)
-        p2_magic = f.read(4)
-        check("Partition 2 (SquashFS) magic ('hsqs') at sector 2099200", p2_magic == b"hsqs", f"Found: {p2_magic.hex()}")
+        # Ext4 Superblock is at offset 1024, magic 0xef53 is at offset 1080 of partition
+        f.seek(2099200 * 512 + 1080)
+        p2_sb_magic = f.read(2)
+        check("Partition 2 (BHOOT_SYSTEM) Ext4 superblock magic (0xef53) at sector 2099200", p2_sb_magic == b"\x53\xef", f"Found: {p2_sb_magic.hex()}")
 
         # Partition 3: Sector 10487808 (offset 5,369,757,696)
         f.seek(10487808 * 512)
         p3_magic = f.read(6)
-        check("Partition 3 (LUKS2) magic ('LUKS\\xba\\xbe') at sector 10487808", p3_magic == b"LUKS\xba\xbe", f"Found: {p3_magic.hex()}")
+        check("Partition 3 (BHOOT_DATA) LUKS2 magic ('LUKS\\xba\\xbe') at sector 10487808", p3_magic == b"LUKS\xba\xbe", f"Found: {p3_magic.hex()}")
 
         # Partition 4: Sector 111151104 (offset 56,909,365,248)
-        f.seek(111151104 * 512)
-        p4_sample = f.read(8192)
-        check("Partition 4 (Recovery) payload is non-zero at sector 111151104", any(b != 0 for b in p4_sample))
+        f.seek(111151104 * 512 + 1080)
+        p4_sb_magic = f.read(2)
+        check("Partition 4 (BHOOT_RECOVERY) Ext4 superblock magic (0xef53) at sector 111151104", p4_sb_magic == b"\x53\xef", f"Found: {p4_sb_magic.hex()}")
 else:
     check("Assembled disk image exists", False, f"File not found: {disk_path}")
 
@@ -258,6 +280,12 @@ artifacts_meta = [
         "hash_mode": "full"
     },
     {
+        "filename": "bhoot_system_ext4.img",
+        "description": "4 GiB sparse Ext4 partition containing /live/filesystem.squashfs with canonical UUID",
+        "role": "system_partition",
+        "hash_mode": "gpt_header_2m"
+    },
+    {
         "filename": "BOOTX64.EFI",
         "description": "Standalone GRUB2 UEFI x86_64 bootloader executable",
         "role": "bootloader",
@@ -265,13 +293,13 @@ artifacts_meta = [
     },
     {
         "filename": "bhoot_esp.img",
-        "description": "1 GiB FAT32 EFI System Partition containing bootloader, kernel, initramfs, and grub.cfg",
+        "description": "1 GiB FAT32 EFI System Partition containing bootloader, kernel, initramfs, squashfs, and grub.cfg",
         "role": "esp_partition",
         "hash_mode": "full"
     },
     {
         "filename": "bhoot_luks_prod_48g.img",
-        "description": "48 GiB sparse LUKS2 volume (Argon2id + AES-256-XTS, 4096 sector size)",
+        "description": "Complete 48 GiB sparse LUKS2 volume (Argon2id + AES-256-XTS) with formatted Ext4 persistence",
         "role": "encrypted_persistence_prod",
         "hash_mode": "header_16m"
     },
@@ -295,7 +323,7 @@ artifacts_meta = [
     },
     {
         "filename": "bhoot_disk_assembled.img",
-        "description": "57.81 GiB whole sparse disk image with complete GPT table and embedded partition payloads",
+        "description": "57.81 GiB whole sparse disk image with complete GPT table and all four partition payloads",
         "role": "whole_disk_image",
         "hash_mode": "gpt_header_2m"
     }
@@ -303,7 +331,7 @@ artifacts_meta = [
 
 manifest_data = {
     "project": "BHOOT",
-    "phase": "2A.2",
+    "phase": "2A.3",
     "target_platform": "Dedicated Bootable USB (UEFI x86_64)",
     "base_distribution": "Debian 12 Bookworm amd64",
     "kernel": "Linux 6.1.0-50-amd64",
@@ -341,12 +369,17 @@ with open(MANIFEST_FILE, "w") as out:
 
 check(f"Manifest written to {MANIFEST_FILE}", os.path.isfile(MANIFEST_FILE))
 
+# Securely remove temporary session key
+session_key_tmp = os.path.join(BUILD_REAL, ".session_key.tmp")
+if os.path.exists(session_key_tmp):
+    os.remove(session_key_tmp)
+
 print("\n" + "=" * 72)
 if failed == 0:
-    print(f" [Phase 2A.2 - Step 07] ALL {passed} FORENSIC VERIFICATIONS PASSED!")
+    print(f" [Phase 2A.3 - Step 07] ALL {passed} FORENSIC VERIFICATIONS PASSED!")
     print("=" * 72)
     sys.exit(0)
 else:
-    print(f" [Phase 2A.2 - Step 07] {failed} VERIFICATIONS FAILED ({passed} passed)!")
+    print(f" [Phase 2A.3 - Step 07] {failed} VERIFICATIONS FAILED ({passed} passed)!")
     print("=" * 72)
     sys.exit(1)

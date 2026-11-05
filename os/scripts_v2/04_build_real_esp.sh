@@ -95,6 +95,11 @@ cp "$REAL_KERNEL" "$MOUNT_POINT/live/vmlinuz"
 echo "  Copying genuine initial ramdisk to /live/initrd.img..."
 cp "$REAL_INITRD" "$MOUNT_POINT/live/initrd.img"
 
+if [ -f "$BUILD_REAL/filesystem.squashfs" ]; then
+    echo "  Staging live root filesystem in ESP for dual-stage discovery..."
+    cp "$BUILD_REAL/filesystem.squashfs" "$MOUNT_POINT/live/filesystem.squashfs"
+fi
+
 # 7. Write cryptographic manifest and kernel details to ESP
 KERNEL_SHA256=$(sha256sum "$REAL_KERNEL" | awk '{print $1}')
 INITRD_SHA256=$(sha256sum "$REAL_INITRD" | awk '{print $1}')
@@ -136,3 +141,4 @@ trap - EXIT
 echo "========================================================================"
 echo " [Phase 2A.2 - Step 04] Genuine EFI System Partition Build Complete"
 echo "========================================================================"
+
