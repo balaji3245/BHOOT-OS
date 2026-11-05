@@ -7,8 +7,8 @@ After=systemd-modules-load.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/sbin/rfkill block all
-ExecStartPost=/bin/sh -c 'ip link set dev $(ip link show | grep -E "wl|ww|en|eth" | cut -d: -f2 | tr -d " ") down 2>/dev/null || true'
+ExecStart=-/usr/sbin/rfkill block all
+ExecStartPost=-/bin/sh -c 'for dev in $(ip -o link show | awk -F": " "{print \$2}"); do [ "$dev" != "lo" ] && ip link set dev "$dev" down || true; done'
 
 [Install]
 WantedBy=basic.target

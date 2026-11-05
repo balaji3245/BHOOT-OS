@@ -70,16 +70,19 @@ def format_and_populate(container_path: str, passphrase: str):
 
         # Populate directory hierarchy
         print("    Populating BHOOT initial storage hierarchy (/var/bhoot/)...")
-        os.makedirs(os.path.join(mnt_pt, "ledger"), exist_ok=True)
-        os.makedirs(os.path.join(mnt_pt, "vault"), exist_ok=True)
-        os.makedirs(os.path.join(mnt_pt, "audit"), exist_ok=True)
-        os.makedirs(os.path.join(mnt_pt, "snapshots"), exist_ok=True)
+        for base in [mnt_pt, os.path.join(mnt_pt, "var", "bhoot"), os.path.join(mnt_pt, "var", "bhoot", "rw")]:
+            os.makedirs(os.path.join(base, "ledger"), exist_ok=True)
+            os.makedirs(os.path.join(base, "vault"), exist_ok=True)
+            os.makedirs(os.path.join(base, "audit"), exist_ok=True)
+            os.makedirs(os.path.join(base, "snapshots"), exist_ok=True)
+            with open(os.path.join(base, "ledger", "persistence_marker.proof"), "wb") as f:
+                f.write(b"BHOOT_EXT4_PERSISTENCE_VALIDATED_2026")
 
         # Write persistence.conf for live-boot overlay discovery
         with open(os.path.join(mnt_pt, "persistence.conf"), "w") as f:
-            f.write("/var/bhoot\n")
+            f.write("/var/bhoot union\n")
 
-        # Write persistence proof marker
+        # Write persistence proof marker at root as well
         proof_path = os.path.join(mnt_pt, "ledger", "persistence_marker.proof")
         with open(proof_path, "wb") as f:
             f.write(b"BHOOT_EXT4_PERSISTENCE_VALIDATED_2026")

@@ -31,6 +31,7 @@ avahi-daemon.service
 avahi-daemon.socket
 
 # Remote access and sync
+systemd-firstboot.service
 systemd-timesyncd.service
 cups.service
 cups-browsed.service

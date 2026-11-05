@@ -61,3 +61,4 @@ echo "  BHOOT_SYSTEM image created successfully: $SYSTEM_SIZE bytes (sparse)"
 echo "========================================================================"
 echo " [Phase 2A.3 - Step 03B] BHOOT_SYSTEM Ext4 Partition Image Complete"
 echo "========================================================================"
+

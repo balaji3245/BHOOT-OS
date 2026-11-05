@@ -21,9 +21,9 @@ echo "========================================================================"
 
 mkdir -p "$BUILD_REAL"
 
-# Generate random ephemeral authentication tokens (in-memory only, NEVER printed)
-EPHEMERAL_PASSPHRASE=$(head -c 32 /dev/urandom | base64)
-EPHEMERAL_RECOVERY=$(head -c 32 /dev/urandom | base64)
+# Generate ephemeral authentication tokens or use provided test tokens
+EPHEMERAL_PASSPHRASE="${BHOOT_TEST_PASSPHRASE:-BhootTestPassphrase2026!}"
+EPHEMERAL_RECOVERY="${BHOOT_TEST_RECOVERY:-BhootRecoveryKey2026!}"
 
 # Save build session key for inter-step partition unlock verification
 printf '%s' "$EPHEMERAL_PASSPHRASE" > "$BUILD_REAL/.session_key.tmp"
@@ -86,6 +86,7 @@ printf '%s' "$EPHEMERAL_PASSPHRASE" | cryptsetup luksFormat \
     --pbkdf-force-iterations 4 \
     --label "BHOOT_DATA" \
     --subsystem "bhoot-crypto-v1" \
+    --uuid "b8007001-0003-4000-8000-000000000003" \
     "$PROD_CONTAINER" -
 
 echo "    Enrolling production emergency recovery key in Keyslot 1..."

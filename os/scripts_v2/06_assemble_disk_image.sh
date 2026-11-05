@@ -111,7 +111,7 @@ dd if="$RECOVERY_IMG" of="$ASSEMBLED_DISK" bs=1M seek=54273 count=4096 conv=notr
 echo "  Performing forensic byte inspection on assembled disk image..."
 
 # Partition 1: Check FAT32 magic
-P1_MAGIC=$(dd if="$ASSEMBLED_DISK" bs=512 skip=2048 count=1 2>/dev/null | xxd -p -s 510 -l 2)
+P1_MAGIC=$(dd if="$ASSEMBLED_DISK" bs=1 skip=$((2048*512 + 510)) count=2 2>/dev/null | xxd -p)
 if [ "$P1_MAGIC" != "55aa" ]; then
     echo "  ERROR: Partition 1 at sector 2048 does not contain valid FAT32 boot sector (magic: $P1_MAGIC)!" >&2
     exit 1
@@ -119,7 +119,7 @@ fi
 echo "  Verified Partition 1 (ESP) FAT32 boot signature (0x55aa) at sector 2048."
 
 # Partition 2: Check Ext4 superblock magic (0xef53 at offset 1080 of partition)
-P2_SB_MAGIC=$(dd if="$ASSEMBLED_DISK" bs=512 skip=2099200 count=4 2>/dev/null | xxd -p -s 1080 -l 2)
+P2_SB_MAGIC=$(dd if="$ASSEMBLED_DISK" bs=1 skip=$((2099200*512 + 1080)) count=2 2>/dev/null | xxd -p)
 if [ "$P2_SB_MAGIC" != "53ef" ]; then
     echo "  ERROR: Partition 2 at sector 2099200 does not contain Ext4 superblock magic (found: $P2_SB_MAGIC)!" >&2
     exit 1
@@ -127,7 +127,7 @@ fi
 echo "  Verified Partition 2 (BHOOT_SYSTEM) Ext4 superblock magic (0xef53) at sector 2099200."
 
 # Partition 3: Check LUKS2 magic ('LUKS\xba\xbe') -> hex '4c554b53babe'
-P3_MAGIC=$(dd if="$ASSEMBLED_DISK" bs=512 skip=10487808 count=1 2>/dev/null | xxd -p -s 0 -l 6)
+P3_MAGIC=$(dd if="$ASSEMBLED_DISK" bs=1 skip=$((10487808*512)) count=6 2>/dev/null | xxd -p)
 if [ "$P3_MAGIC" != "4c554b53babe" ]; then
     echo "  ERROR: Partition 3 at sector 10487808 does not contain LUKS2 magic (found: $P3_MAGIC)!" >&2
     exit 1
@@ -135,7 +135,7 @@ fi
 echo "  Verified Partition 3 (BHOOT_DATA) LUKS2 magic (4c554b53babe) at sector 10487808."
 
 # Partition 4: Check Ext4 superblock magic
-P4_SB_MAGIC=$(dd if="$ASSEMBLED_DISK" bs=512 skip=111151104 count=4 2>/dev/null | xxd -p -s 1080 -l 2)
+P4_SB_MAGIC=$(dd if="$ASSEMBLED_DISK" bs=1 skip=$((111151104*512 + 1080)) count=2 2>/dev/null | xxd -p)
 if [ "$P4_SB_MAGIC" != "53ef" ]; then
     echo "  ERROR: Partition 4 at sector 111151104 does not contain Ext4 superblock magic (found: $P4_SB_MAGIC)!" >&2
     exit 1

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# BHOOT Phase 2A.3 - Automated UEFI Virtualized Boot Test Harness
-# Launches QEMU with OVMF UEFI firmware, zero networking, and logs boot sequence.
+# BHOOT Phase 2A.4 - Automated UEFI Virtualized Boot Test Harness
+# Launches QEMU with OVMF UEFI firmware, zero networking, enters LUKS passphrase,
+# and verifies all 10 stages of the boot progression and runtime security invariants.
 
 set -euo pipefail
 
@@ -12,7 +13,7 @@ DISK_IMG="$BUILD_REAL/bhoot_disk_assembled.img"
 SERIAL_LOG="$BUILD_REAL/qemu_boot_serial.log"
 
 echo "========================================================================"
-echo " [Phase 2A.3] BHOOT UEFI Virtualized Boot Test Harness"
+echo " [Phase 2A.4] BHOOT UEFI Virtualized Boot Test Harness"
 echo "========================================================================"
 
 # 1. Check prerequisites
@@ -45,27 +46,5 @@ echo "  UEFI Firmware:     $OVMF_PATH"
 echo "  Network Policy:    Strict Offline (-net none)"
 echo "  Serial Log Output: $SERIAL_LOG"
 
-rm -f "$SERIAL_LOG"
-
-# 2. Launch QEMU with timeout
-echo "  Launching QEMU UEFI virtual machine (60 second execution window)..."
-timeout 60s qemu-system-x86_64 \
-    -machine q35,accel=kvm:tcg \
-    -m 4096 \
-    -smp 4 \
-    -drive if=pflash,format=raw,readonly=on,file="$OVMF_PATH" \
-    -drive file="$DISK_IMG",format=raw,if=virtio \
-    -net none \
-    -display none \
-    -serial file:"$SERIAL_LOG" \
-    -monitor none || true
-
-echo "  QEMU test run concluded. Inspecting serial boot logs..."
-if [ -f "$SERIAL_LOG" ] && [ -s "$SERIAL_LOG" ]; then
-    echo "  Serial log captured ($(wc -l < "$SERIAL_LOG") lines, $(stat -c %s "$SERIAL_LOG") bytes):"
-    head -n 25 "$SERIAL_LOG"
-    echo "  [...]"
-    tail -n 25 "$SERIAL_LOG"
-else
-    echo "  WARNING: Serial log is empty or was not generated."
-fi
+# 2. Execute automated interactive boot verifier
+python3 "$SCRIPT_DIR/qemu_uefi_boot_verifier.py"

@@ -1,22 +1,13 @@
 # BHOOT Filesystem Table (fstab)
-# <file system>                                 <mount point>   <type>      <options>                                                   <dump>  <pass>
+# Core system root (OverlayFS) and persistence (/var/bhoot) are managed by Debian live-boot.
+# <file system>    <mount point>   <type>      <options>                                                   <dump>  <pass>
 
-# Read-Only Live System Root (SquashFS overlaid with volatile tmpfs)
-# Ephemeral root ensures system modifications evaporate on reboot
-overlay                                         /               overlay     lowerdir=/lib/live/mount/medium/live/filesystem.squashfs,upperdir=/run/bhoot/root-upper,workdir=/run/bhoot/root-work   0   0
-
-# EFI System Partition (read-only in normal operation to prevent firmware/boot manipulation)
-LABEL=BHOOT_EFI                                 /boot/efi       vfat        ro,nodev,nosuid,noexec,fmask=0177,dmask=0077                0       2
-
-# Encrypted Persistent Financial Data Partition
-# Formatted as ext4 with journaling and barrier enabled for power-loss safety
-/dev/mapper/bhoot_data                          /var/bhoot      ext4        defaults,noexec,nosuid,nodev,data=ordered,errors=remount-ro,commit=5   0   2
+# EFI System Partition (read-only, on-demand mount with nofail to prevent boot block)
+LABEL=BHOOT_EFI    /boot/efi       vfat        ro,nodev,nosuid,noexec,fmask=0177,dmask=0077,nofail,noauto    0       0
 
 # Volatile In-Memory Directories (RAM only - zero disk write traces)
-tmpfs                                           /tmp            tmpfs       defaults,nosuid,nodev,noexec,mode=1777,size=2G              0       0
-tmpfs                                           /var/log        tmpfs       defaults,nosuid,nodev,noexec,mode=0755,size=128M            0       0
-tmpfs                                           /run            tmpfs       defaults,nosuid,nodev,mode=0755,size=1G                     0       0
-devpts                                          /dev/pts        devpts      defaults,gid=5,mode=620,noexec,nosuid                       0       0
-proc                                            /proc           proc        defaults,nosuid,nodev,noexec,hidepid=2                      0       0
-sysfs                                           /sys            sysfs       defaults,nosuid,nodev,noexec                                0       0
-
+tmpfs              /tmp            tmpfs       defaults,nosuid,nodev,noexec,mode=1777,size=2G                0       0
+tmpfs              /run            tmpfs       defaults,nosuid,nodev,mode=0755,size=1G                       0       0
+devpts             /dev/pts        devpts      defaults,gid=5,mode=620,noexec,nosuid                         0       0
+proc               /proc           proc        defaults,nosuid,nodev,noexec,hidepid=2                        0       0
+sysfs              /sys            sysfs       defaults,nosuid,nodev,noexec                                  0       0
