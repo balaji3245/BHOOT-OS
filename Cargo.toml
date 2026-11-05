@@ -1,0 +1,66 @@
+[workspace]
+members = [
+    "crates/bhoot-core",
+    "crates/bhoot-crypto",
+    "crates/bhoot-db",
+    "crates/bhoot-audit",
+    "crates/bhoot-vault",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["BHOOT Core Engineering <dev@bhoot.internal>"]
+license = "Proprietary"
+repository = "https://github.com/bhoot-private/bhoot"
+
+[workspace.dependencies]
+# Internal workspace crates
+bhoot-core = { path = "crates/bhoot-core" }
+bhoot-crypto = { path = "crates/bhoot-crypto" }
+bhoot-db = { path = "crates/bhoot-db" }
+bhoot-audit = { path = "crates/bhoot-audit" }
+bhoot-vault = { path = "crates/bhoot-vault" }
+
+# Serialization & Identifiers
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde", "clock"] }
+uuid = { version = "1.15", features = ["v4", "serde"] }
+
+# Error Handling
+thiserror = "2.0"
+
+# Cryptography & Security
+argon2 = { version = "0.5", features = ["std", "alloc"] }
+aes-gcm = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+blake3 = "1.8"
+rand = "0.8"
+zeroize = { version = "1.8", features = ["derive", "zeroize_derive"] }
+secrecy = { version = "0.10", features = ["serde"] }
+
+# Testing
+proptest = "1.6"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+too_many_arguments = "allow"
+missing_errors_doc = "allow"
+doc_markdown = "allow"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+overflow-checks = true
+
+[profile.dev]
+overflow-checks = true
