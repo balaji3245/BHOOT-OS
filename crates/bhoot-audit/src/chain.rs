@@ -2,19 +2,33 @@ use crate::error::AuditError;
 use crate::event::{AuditEvent, AuditEventType};
 use chrono::{DateTime, Utc};
 
-/// Cryptographically chained append-only audit trail.
+/// Cryptographically chained append-only audit trail supporting HMAC-SHA256 authentication.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct AuditChain {
     events: Vec<AuditEvent>,
+    audit_key: Option<[u8; 32]>,
 }
 
 impl AuditChain {
     /// Genesis previous hash constant (32 zeros).
     pub const GENESIS_PREV_HASH: [u8; 32] = [0u8; 32];
 
+    /// Construct a new unkeyed audit chain.
     #[must_use]
     pub fn new() -> Self {
-        Self { events: Vec::new() }
+        Self {
+            events: Vec::new(),
+            audit_key: None,
+        }
+    }
+
+    /// Construct a new keyed audit chain using the HKDF-derived audit subkey.
+    #[must_use]
+    pub fn with_key(audit_key: [u8; 32]) -> Self {
+        Self {
+            events: Vec::new(),
+            audit_key: Some(audit_key),
+        }
     }
 
     /// Number of events recorded in the chain.
@@ -58,7 +72,8 @@ impl AuditChain {
         let entity_id_str = entity_id.into();
         let payload_str = payload_json.into();
 
-        let hash = AuditEvent::compute_hash(
+        let hash = AuditEvent::compute_block_digest(
+            self.audit_key.as_ref(),
             sequence,
             &timestamp,
             event_type,
@@ -88,7 +103,7 @@ impl AuditChain {
     /// - Sequence numbers are not monotonically sequential.
     /// - Genesis block does not start with zeros.
     /// - Any block's `prev_hash` does not match the previous block's `hash`.
-    /// - Computed hash does not match stored block hash.
+    /// - Computed block digest (HMAC or SHA-256) does not match stored block hash.
     pub fn verify_integrity(&self) -> Result<(), AuditError> {
         if self.events.is_empty() {
             return Ok(());
@@ -111,7 +126,8 @@ impl AuditChain {
                 });
             }
 
-            let recomputed_hash = AuditEvent::compute_hash(
+            let recomputed_hash = AuditEvent::compute_block_digest(
+                self.audit_key.as_ref(),
                 event.sequence,
                 &event.timestamp,
                 event.event_type,

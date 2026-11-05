@@ -13,17 +13,30 @@ use zeroize::Zeroizing;
 /// Maximum single document limit: 50 MiB.
 pub const MAX_DOCUMENT_SIZE_BYTES: usize = 50 * 1024 * 1024;
 
+/// Maximum aggregate in-memory vault staging bound: 256 MiB (MED-05 remediation).
+///
+/// In Phase 7 (Proof Vault), ciphertext envelopes will stream directly to disk-backed
+/// LUKS2 encrypted storage, keeping only 32-byte content hashes and metadata in RAM.
+pub const MAX_IN_MEMORY_VAULT_BYTES: usize = 256 * 1024 * 1024;
+
 /// Encrypted Proof Vault store with content deduplication and integrity hashing.
 #[derive(Debug, Default, Clone)]
 pub struct VaultStore {
     documents: HashMap<Uuid, VaultDocument>,
     hash_index: HashMap<[u8; 32], Uuid>,
+    total_stored_bytes: usize,
 }
 
 impl VaultStore {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Total plaintext bytes currently managed in memory.
+    #[must_use]
+    pub fn total_stored_bytes(&self) -> usize {
+        self.total_stored_bytes
     }
 
     /// Number of documents currently stored.
@@ -59,6 +72,15 @@ impl VaultStore {
         if raw_bytes.len() > MAX_DOCUMENT_SIZE_BYTES {
             return Err(VaultError::FileTooLarge {
                 limit_bytes: MAX_DOCUMENT_SIZE_BYTES,
+            });
+        }
+
+        // Enforce in-memory vault capacity ceiling (MED-05 remediation)
+        let projected_bytes = self.total_stored_bytes.saturating_add(raw_bytes.len());
+        if projected_bytes > MAX_IN_MEMORY_VAULT_BYTES {
+            return Err(VaultError::VaultCapacityExceeded {
+                current_bytes: self.total_stored_bytes,
+                ceiling_bytes: MAX_IN_MEMORY_VAULT_BYTES,
             });
         }
 
@@ -100,6 +122,7 @@ impl VaultStore {
 
         self.hash_index.insert(b3_hash, doc_id);
         self.documents.insert(doc_id, doc);
+        self.total_stored_bytes = projected_bytes;
 
         Ok(doc_id)
     }

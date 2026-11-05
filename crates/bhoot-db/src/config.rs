@@ -21,7 +21,18 @@ impl Default for SqlCipherConfig {
 }
 
 impl SqlCipherConfig {
+    /// Direct key pointer interface for SQLCipher C-FFI (`sqlite3_key`).
+    ///
+    /// Avoids formatting raw key bytes into temporary heap `String`s (LOW-02 remediation).
+    #[must_use]
+    pub const fn direct_key_slice<'a>(&self, raw_key_32: &'a [u8; 32]) -> &'a [u8] {
+        raw_key_32
+    }
+
     /// Generate standard SQLCipher PRAGMA statements for key attachment and hardening.
+    ///
+    /// Note: In Phase 4, production database initialization should prefer `direct_key_slice`
+    /// via `sqlite3_key(db, ptr, 32)` to eliminate heap residue of hex keys.
     #[must_use]
     pub fn generate_pragmas(&self, raw_key_32: &[u8; 32]) -> Vec<String> {
         let hex_key: String = raw_key_32.iter().map(|b| format!("{b:02x}")).collect();

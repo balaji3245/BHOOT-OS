@@ -25,6 +25,31 @@ impl Default for Argon2idParams {
     }
 }
 
+impl Argon2idParams {
+    /// Validate security bounds according to RFC 9106.
+    ///
+    /// # Errors
+    /// Returns `CryptoError::KeyDerivationFailed` if parameters fall below RFC 9106 minimums.
+    pub fn validate(&self) -> Result<(), CryptoError> {
+        if self.m_cost < 8 * self.p_cost {
+            return Err(CryptoError::KeyDerivationFailed(
+                "Memory cost must be at least 8 * p_cost KiB".into(),
+            ));
+        }
+        if self.t_cost < 1 {
+            return Err(CryptoError::KeyDerivationFailed(
+                "Time cost must be at least 1 iteration".into(),
+            ));
+        }
+        if self.p_cost < 1 {
+            return Err(CryptoError::KeyDerivationFailed(
+                "Parallelism must be at least 1 lane".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Generate a 32-byte cryptographically secure random salt.
 #[must_use]
 pub fn generate_salt() -> [u8; 32] {
@@ -44,6 +69,8 @@ pub fn derive_master_key(
     salt: &[u8],
     params: Argon2idParams,
 ) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
+    params.validate()?;
+
     if salt.len() < 16 {
         return Err(CryptoError::KeyDerivationFailed(
             "Salt must be at least 16 bytes for Argon2id".into(),

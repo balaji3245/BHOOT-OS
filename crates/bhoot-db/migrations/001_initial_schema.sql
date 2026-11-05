@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     reference_number TEXT,
     notes TEXT,
     verification_status TEXT NOT NULL DEFAULT 'Pending',
-    reversal_of TEXT,
+    reversal_of TEXT UNIQUE,
     FOREIGN KEY (reversal_of) REFERENCES transactions(id) ON DELETE RESTRICT
 );
 

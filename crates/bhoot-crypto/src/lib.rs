@@ -126,6 +126,30 @@ mod tests {
     }
 
     #[test]
+    fn test_subkeys_debug_masking() {
+        // REGRESSION TEST FOR MEMORY EXPOSURE:
+        // Ensure SubKeys Debug trait does not leak raw key bytes in logs or formatting.
+        let master_key = [0x77u8; 32];
+        let subkeys = derive_subkeys(&master_key).expect("derived");
+        let debug_str = format!("{subkeys:?}");
+
+        assert!(debug_str.contains("[REDACTED]"));
+        assert!(!debug_str.contains("119")); // 0x77 in decimal
+    }
+
+    #[test]
+    fn test_argon2id_parameter_validation() {
+        // REGRESSION TEST:
+        // Reject unsafe parameters below RFC 9106 minimums.
+        let bad_params = Argon2idParams {
+            m_cost: 4, // Below 8 * p_cost (8 KiB)
+            t_cost: 1,
+            p_cost: 1,
+        };
+        assert!(derive_master_key(b"password", &[0x01u8; 16], bad_params).is_err());
+    }
+
+    #[test]
     fn test_nonce_uniqueness_property() {
         let mut nonces = HashSet::new();
         for _ in 0..1000 {

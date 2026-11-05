@@ -2,7 +2,7 @@ use crate::account::{Account, AccountId, AccountType, NormalBalance};
 use crate::error::CoreError;
 use crate::money::Money;
 use crate::transaction::{Direction, Posting, Transaction, TransactionId, TransactionType};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Pure Rust in-memory double-entry accounting ledger engine.
 ///
@@ -13,6 +13,7 @@ pub struct Ledger {
     transactions: Vec<Transaction>,
     transaction_index: HashMap<TransactionId, usize>,
     account_postings: HashMap<AccountId, Vec<usize>>,
+    reversed_transactions: HashSet<TransactionId>,
 }
 
 impl Ledger {
@@ -20,6 +21,12 @@ impl Ledger {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Check if a historical transaction has already been reversed.
+    #[must_use]
+    pub fn is_reversed(&self, tx_id: &TransactionId) -> bool {
+        self.reversed_transactions.contains(tx_id)
     }
 
     /// Register a new account into the ledger.
@@ -79,23 +86,75 @@ impl Ledger {
             }
         }
 
-        // Verify reversal constraints
-        if tx.tx_type == TransactionType::Reversal {
-            if let Some(orig_id) = tx.reversal_of {
-                if !self.transaction_index.contains_key(&orig_id) {
-                    return Err(CoreError::InvalidReversal(format!(
-                        "Original transaction {orig_id} to be reversed does not exist in ledger"
-                    )));
+        // 1. Transfer semantic validation (MED-01 remediation)
+        // Transfers, deposits, and withdrawals represent internal fund movements across owned
+        // balance-sheet accounts (Asset or Liability) and must never contain Income, Expense, or Equity legs.
+        if matches!(
+            tx.tx_type,
+            TransactionType::Transfer | TransactionType::Deposit | TransactionType::Withdrawal
+        ) {
+            for posting in &tx.postings {
+                let account = &self.accounts[&posting.account_id];
+                match account.account_type {
+                    AccountType::Asset | AccountType::Liability => {
+                        // Valid balance-sheet reallocation
+                    }
+                    AccountType::Income | AccountType::Expense | AccountType::Equity => {
+                        return Err(CoreError::InvalidTransferAccount {
+                            account_id: account.id.to_string(),
+                            found: format!("{:?}", account.account_type),
+                        });
+                    }
                 }
             }
         }
 
+        // 2. Verify reversal constraints (HIGH-02 & MED-02 remediation)
+        let mut orig_tx_id_to_record = None;
+        if tx.tx_type == TransactionType::Reversal {
+            let orig_id = tx.reversal_of.ok_or_else(|| {
+                CoreError::InvalidReversal(
+                    "Reversal transaction must explicitly reference the original transaction ID"
+                        .into(),
+                )
+            })?;
+
+            // Ensure original transaction exists in the ledger
+            let orig_idx = self.transaction_index.get(&orig_id).ok_or_else(|| {
+                CoreError::InvalidReversal(format!(
+                    "Original transaction {orig_id} to be reversed does not exist in ledger"
+                ))
+            })?;
+
+            // Reject reversal of a transaction that is itself a Reversal (MED-02 remediation)
+            let orig_tx = &self.transactions[*orig_idx];
+            if orig_tx.tx_type == TransactionType::Reversal {
+                return Err(CoreError::InvalidReversal(format!(
+                    "Cannot reverse transaction {orig_id}: target transaction is already a reversal"
+                )));
+            }
+
+            // Reject duplicate reversal of the same original transaction (HIGH-02 remediation)
+            if self.reversed_transactions.contains(&orig_id) {
+                return Err(CoreError::InvalidReversal(format!(
+                    "Transaction {orig_id} has already been reversed"
+                )));
+            }
+
+            orig_tx_id_to_record = Some(orig_id);
+        }
+
+        // 3. Commit state (all validations passed; atomic update)
         let tx_index = self.transactions.len();
         for posting in &tx.postings {
             self.account_postings
                 .entry(posting.account_id)
                 .or_default()
                 .push(tx_index);
+        }
+
+        if let Some(orig_id) = orig_tx_id_to_record {
+            self.reversed_transactions.insert(orig_id);
         }
 
         self.transaction_index.insert(tx.id, tx_index);

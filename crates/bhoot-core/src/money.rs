@@ -26,6 +26,9 @@ impl Money {
 
     /// Construct Money from discrete Rupees and Paisa components.
     ///
+    /// Note: To construct negative fractional amounts with zero whole Rupees (e.g. -₹0.50),
+    /// use [`Self::from_rupees_and_paisa_signed`] or [`Self::from_paisa`], since `-0 == 0`.
+    ///
     /// # Errors
     /// Returns `CoreError::InvalidAmount` if `paisa >= 100` or if multiplication overflows.
     pub fn from_rupees_and_paisa(rupees: i64, paisa: u32) -> Result<Self, CoreError> {
@@ -51,6 +54,43 @@ impl Money {
         };
 
         Ok(Self(total_paisa))
+    }
+
+    /// Construct Money from explicit signed components, supporting negative fractional amounts (e.g. -₹0.50).
+    ///
+    /// # Errors
+    /// Returns `CoreError::InvalidAmount` if `paisa >= 100` or `CoreError::ArithmeticOverflow`.
+    pub fn from_rupees_and_paisa_signed(
+        is_negative: bool,
+        rupees: u64,
+        paisa: u32,
+    ) -> Result<Self, CoreError> {
+        if paisa >= 100 {
+            return Err(CoreError::InvalidAmount(format!(
+                "Paisa component must be between 0 and 99, got {paisa}"
+            )));
+        }
+
+        let rupee_paisa = rupees
+            .checked_mul(100)
+            .ok_or_else(|| CoreError::ArithmeticOverflow("Rupees to paisa overflow".into()))?;
+
+        let total_unsigned = rupee_paisa
+            .checked_add(u64::from(paisa))
+            .ok_or_else(|| CoreError::ArithmeticOverflow("Paisa addition overflow".into()))?;
+
+        if total_unsigned > (i64::MAX as u64) {
+            return Err(CoreError::ArithmeticOverflow(
+                "Amount exceeds i64::MAX".into(),
+            ));
+        }
+
+        let total_signed = total_unsigned as i64;
+        if is_negative {
+            Ok(Self(-total_signed))
+        } else {
+            Ok(Self(total_signed))
+        }
     }
 
     /// Return the raw value in Paisa.

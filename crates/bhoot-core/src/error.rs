@@ -45,6 +45,9 @@ pub enum CoreError {
     #[error("Invalid reversal transaction: {0}")]
     InvalidReversal(String),
 
+    #[error("Invalid transfer posting: transfers can only involve Asset or Liability accounts, found {found} for account {account_id}")]
+    InvalidTransferAccount { account_id: String, found: String },
+
     #[error("Invalid broker trade record: {0}")]
     InvalidTrade(String),
 

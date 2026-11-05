@@ -30,7 +30,8 @@ pub fn generate_nonce() -> [u8; 12] {
 
 /// Encrypt arbitrary data using AES-256-GCM and compute pre-encryption integrity hash.
 ///
-/// Draws a fresh 96-bit nonce from `OsRng`. **Nonce reuse is mathematically impossible here.**
+/// Draws a fresh 96-bit nonce from `OsRng`. In compliance with NIST SP 800-38D Section 8.3,
+/// the maximum recommended invocations under a single key with random nonces is 2^32.
 ///
 /// # Errors
 /// Returns `CryptoError::EncryptionFailed` if AEAD encryption fails.
@@ -74,7 +75,8 @@ pub fn encrypt_envelope_with_nonce(
 /// 1. AES-256-GCM authentication tag.
 /// 2. BLAKE3 plaintext digest matches pre-encryption hash in constant time.
 ///
-/// Plaintext is returned wrapped in a `Zeroizing` buffer that wipes memory upon drop.
+/// Decrypted plaintext is wrapped in a `Zeroizing` buffer immediately upon decryption (MED-03 remediation),
+/// ensuring memory is scrubbed even if the subsequent integrity verification fails.
 ///
 /// # Errors
 /// Returns `CryptoError::DecryptionFailed` on bad tag/ciphertext.
@@ -87,9 +89,12 @@ pub fn decrypt_envelope(
 
     let nonce = Nonce::from_slice(&envelope.nonce);
 
-    let plaintext_raw = cipher
-        .decrypt(nonce, envelope.ciphertext.as_ref())
-        .map_err(|_| CryptoError::DecryptionFailed)?;
+    // MED-03 remediation: wrap in Zeroizing immediately upon decryption so failure paths wipe memory
+    let plaintext_raw = Zeroizing::new(
+        cipher
+            .decrypt(nonce, envelope.ciphertext.as_ref())
+            .map_err(|_| CryptoError::DecryptionFailed)?,
+    );
 
     let computed_hash = blake3_hash(&plaintext_raw);
 
@@ -97,5 +102,5 @@ pub fn decrypt_envelope(
         return Err(CryptoError::IntegrityBreach);
     }
 
-    Ok(Zeroizing::new(plaintext_raw))
+    Ok(plaintext_raw)
 }

@@ -1,10 +1,10 @@
 use crate::error::CryptoError;
 use hkdf::Hkdf;
 use sha2::Sha256;
+use std::fmt;
 use zeroize::Zeroizing;
 
 /// Cryptographically separated operational subkeys derived from the Master Key.
-#[derive(Debug)]
 pub struct SubKeys {
     /// 256-bit key dedicated to SQLCipher SQLite database page encryption.
     pub db_key: Zeroizing<[u8; 32]>,
@@ -12,6 +12,16 @@ pub struct SubKeys {
     pub vault_key: Zeroizing<[u8; 32]>,
     /// 256-bit key dedicated to the tamper-evident audit log HMAC verification.
     pub audit_key: Zeroizing<[u8; 32]>,
+}
+
+impl fmt::Debug for SubKeys {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SubKeys")
+            .field("db_key", &"[REDACTED]")
+            .field("vault_key", &"[REDACTED]")
+            .field("audit_key", &"[REDACTED]")
+            .finish()
+    }
 }
 
 const INFO_DB: &[u8] = b"bhoot-sqlcipher-database-key-v1";

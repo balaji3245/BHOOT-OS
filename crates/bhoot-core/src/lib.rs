@@ -393,5 +393,251 @@ mod tests {
             ledger.post_transaction(tx).unwrap();
             prop_assert!(ledger.verify_all_invariants().is_ok());
         }
+
+        #[test]
+        fn prop_transaction_reversal_balance_neutrality(
+            amount in 1i64..50_000_000,
+        ) {
+            let mut ledger = Ledger::new();
+            let bank = Account::new("Bank", AccountType::Asset, AccountSubtype::BankAccount, None);
+            let salary = Account::new("Salary", AccountType::Income, AccountSubtype::Salary, None);
+
+            let bank_id = bank.id;
+            let salary_id = salary.id;
+
+            ledger.add_account(bank).unwrap();
+            ledger.add_account(salary).unwrap();
+
+            let m = Money::from_paisa(amount);
+            let tx = Transaction::new(
+                Utc::now(),
+                TransactionType::Income,
+                vec![
+                    Posting::new(bank_id, m, Direction::Debit, None).unwrap(),
+                    Posting::new(salary_id, m, Direction::Credit, None).unwrap(),
+                ],
+                None, None, None, None, Vec::new(), None,
+            ).unwrap();
+
+            ledger.post_transaction(tx.clone()).unwrap();
+            prop_assert_eq!(ledger.get_balance(&bank_id).unwrap(), m);
+
+            let rev = tx.create_reversal(Utc::now(), "Reversal").unwrap();
+            ledger.post_transaction(rev).unwrap();
+
+            prop_assert_eq!(ledger.get_balance(&bank_id).unwrap(), Money::ZERO);
+            prop_assert_eq!(ledger.get_balance(&salary_id).unwrap(), Money::ZERO);
+            prop_assert!(ledger.verify_all_invariants().is_ok());
+        }
+    }
+
+    #[test]
+    fn test_duplicate_reversal_rejected_high_02() {
+        // REGRESSION TEST FOR HIGH-02:
+        // A historical transaction can only be reversed once.
+        // Duplicate reversal attempts must be rejected and leave ledger state completely unaltered.
+        let mut ledger = Ledger::new();
+        let bank = Account::new(
+            "Bank",
+            AccountType::Asset,
+            AccountSubtype::BankAccount,
+            None,
+        );
+        let expense = Account::new(
+            "Expense",
+            AccountType::Expense,
+            AccountSubtype::LivingExpense,
+            None,
+        );
+
+        let bank_id = bank.id;
+        let expense_id = expense.id;
+
+        ledger.add_account(bank).unwrap();
+        ledger.add_account(expense).unwrap();
+
+        let tx = Transaction::new(
+            Utc::now(),
+            TransactionType::Expense,
+            vec![
+                Posting::new(bank_id, Money::from_paisa(100_000), Direction::Credit, None).unwrap(),
+                Posting::new(
+                    expense_id,
+                    Money::from_paisa(100_000),
+                    Direction::Debit,
+                    None,
+                )
+                .unwrap(),
+            ],
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        ledger.post_transaction(tx.clone()).unwrap();
+
+        // First reversal must succeed
+        let rev1 = tx.create_reversal(Utc::now(), "First reversal").unwrap();
+        ledger
+            .post_transaction(rev1)
+            .expect("First reversal succeeds");
+        assert!(ledger.is_reversed(&tx.id));
+        assert_eq!(ledger.get_balance(&bank_id).unwrap(), Money::ZERO);
+
+        // Second reversal of the same original transaction MUST fail
+        let rev2 = tx.create_reversal(Utc::now(), "Second reversal").unwrap();
+        let err = ledger.post_transaction(rev2);
+        assert!(matches!(err, Err(CoreError::InvalidReversal(_))));
+
+        // Ledger state must remain unchanged after failed duplicate reversal
+        assert_eq!(ledger.get_balance(&bank_id).unwrap(), Money::ZERO);
+        assert_eq!(ledger.transactions().len(), 2);
+    }
+
+    #[test]
+    fn test_reversal_of_reversal_rejected_med_02() {
+        // REGRESSION TEST FOR MED-02:
+        // Cannot reverse a transaction that is itself a reversal.
+        let mut ledger = Ledger::new();
+        let bank = Account::new(
+            "Bank",
+            AccountType::Asset,
+            AccountSubtype::BankAccount,
+            None,
+        );
+        let salary = Account::new("Salary", AccountType::Income, AccountSubtype::Salary, None);
+
+        let bank_id = bank.id;
+        let salary_id = salary.id;
+
+        ledger.add_account(bank).unwrap();
+        ledger.add_account(salary).unwrap();
+
+        let tx = Transaction::new(
+            Utc::now(),
+            TransactionType::Income,
+            vec![
+                Posting::new(bank_id, Money::from_paisa(500_000), Direction::Debit, None).unwrap(),
+                Posting::new(
+                    salary_id,
+                    Money::from_paisa(500_000),
+                    Direction::Credit,
+                    None,
+                )
+                .unwrap(),
+            ],
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        ledger.post_transaction(tx.clone()).unwrap();
+        let rev = tx.create_reversal(Utc::now(), "First reversal").unwrap();
+        ledger.post_transaction(rev.clone()).unwrap();
+
+        // Attempting to reverse the reversal must be rejected
+        let rev_of_rev = rev
+            .create_reversal(Utc::now(), "Reversing reversal")
+            .unwrap();
+        let err = ledger.post_transaction(rev_of_rev);
+        assert!(matches!(err, Err(CoreError::InvalidReversal(_))));
+    }
+
+    #[test]
+    fn test_transfer_semantic_validation_med_01() {
+        // REGRESSION TEST FOR MED-01:
+        // Transfer transactions represent reallocation across balance-sheet accounts (Asset/Liability)
+        // and must strictly reject Income and Expense legs.
+        let mut ledger = Ledger::new();
+        let bank = Account::new(
+            "Bank",
+            AccountType::Asset,
+            AccountSubtype::BankAccount,
+            None,
+        );
+        let credit_card = Account::new(
+            "Credit Card",
+            AccountType::Liability,
+            AccountSubtype::CreditCard,
+            None,
+        );
+        let income = Account::new(
+            "Income",
+            AccountType::Income,
+            AccountSubtype::OtherIncome,
+            None,
+        );
+
+        let bank_id = bank.id;
+        let cc_id = credit_card.id;
+        let income_id = income.id;
+
+        ledger.add_account(bank).unwrap();
+        ledger.add_account(credit_card).unwrap();
+        ledger.add_account(income).unwrap();
+
+        // 1. Valid Transfer: Paying credit card liability from bank asset
+        let valid_transfer = Transaction::new(
+            Utc::now(),
+            TransactionType::Transfer,
+            vec![
+                Posting::new(bank_id, Money::from_paisa(250_000), Direction::Credit, None).unwrap(),
+                Posting::new(cc_id, Money::from_paisa(250_000), Direction::Debit, None).unwrap(),
+            ],
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+        assert!(ledger.post_transaction(valid_transfer).is_ok());
+
+        // 2. Invalid Transfer: Transfer attempting to include an Income account leg
+        let invalid_transfer = Transaction::new(
+            Utc::now(),
+            TransactionType::Transfer,
+            vec![
+                Posting::new(bank_id, Money::from_paisa(100_000), Direction::Debit, None).unwrap(),
+                Posting::new(
+                    income_id,
+                    Money::from_paisa(100_000),
+                    Direction::Credit,
+                    None,
+                )
+                .unwrap(),
+            ],
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+        let err = ledger.post_transaction(invalid_transfer);
+        assert!(matches!(err, Err(CoreError::InvalidTransferAccount { .. })));
+    }
+
+    #[test]
+    fn test_negative_fractional_paisa_low_01() {
+        // REGRESSION TEST FOR LOW-01:
+        // Explicit signed constructor allows unambiguous creation of negative fractional amounts (e.g. -₹0.50).
+        let neg_half_rupee = Money::from_rupees_and_paisa_signed(true, 0, 50).expect("valid");
+        assert_eq!(neg_half_rupee.as_paisa(), -50);
+        assert_eq!(neg_half_rupee.format_inr(), "-₹0.50");
+
+        let pos_half_rupee = Money::from_rupees_and_paisa_signed(false, 0, 50).expect("valid");
+        assert_eq!(pos_half_rupee.as_paisa(), 50);
+        assert_eq!(pos_half_rupee.format_inr(), "₹0.50");
     }
 }

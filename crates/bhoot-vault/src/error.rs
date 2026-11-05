@@ -15,6 +15,12 @@ pub enum VaultError {
     #[error("File size exceeds maximum allowed vault limit of {limit_bytes} bytes")]
     FileTooLarge { limit_bytes: usize },
 
+    #[error("In-memory vault staging ceiling exceeded: {current_bytes} bytes stored exceeds limit of {ceiling_bytes} bytes")]
+    VaultCapacityExceeded {
+        current_bytes: usize,
+        ceiling_bytes: usize,
+    },
+
     #[error("Cryptographic operation failed: {0}")]
     CryptoError(String),
 
