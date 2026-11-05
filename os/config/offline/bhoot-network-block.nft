@@ -1,0 +1,32 @@
+#!/usr/sbin/nft -f
+# BHOOT Zero-Trust Offline Firewall Configuration
+# Drops all inbound, outbound, and forwarded network traffic except local loopback (lo)
+
+flush ruleset
+
+table inet bhoot_filter {
+    chain input {
+        type filter hook input priority 0; policy drop;
+
+        # Allow localhost loopback communication strictly required for internal IPC
+        iifname "lo" accept
+
+        # Drop everything else
+        drop
+    }
+
+    chain forward {
+        type filter hook forward priority 0; policy drop;
+    }
+
+    chain output {
+        type filter hook output priority 0; policy drop;
+
+        # Allow localhost loopback communication
+        oifname "lo" accept
+
+        # Drop all external egress attempts (absolute telemetry & exfiltration prevention)
+        drop
+    }
+}
+

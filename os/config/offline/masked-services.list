@@ -1,0 +1,40 @@
+# List of network, telemetry, and background services masked in BHOOT
+# Masked by symlinking /etc/systemd/system/<unit> -> /dev/null
+
+# Telemetry and automated crash reporting
+whoopsie.service
+whoopsie.path
+apport.service
+apport-autoreport.service
+ubuntu-report.service
+popularity-contest.service
+
+# Cloud and auto-update daemons
+cloud-init.service
+cloud-init-local.service
+cloud-config.service
+cloud-final.service
+apt-daily.service
+apt-daily.timer
+apt-daily-upgrade.service
+apt-daily-upgrade.timer
+packagekit.service
+
+# Network managers and auto-connect daemons
+NetworkManager.service
+NetworkManager-wait-online.service
+wpa_supplicant.service
+modem-manager.service
+ModemManager.service
+bluetooth.service
+avahi-daemon.service
+avahi-daemon.socket
+
+# Remote access and sync
+systemd-timesyncd.service
+cups.service
+cups-browsed.service
+rpcbind.service
+ssh.service
+sshd.service
+

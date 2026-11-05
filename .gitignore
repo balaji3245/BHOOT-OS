@@ -49,3 +49,12 @@ yarn-error.log*
 core
 *.dump
 
+# OS Images and Build Artifacts (Phase 2)
+/os/build/
+*.img
+*.iso
+*.squashfs
+*.raw
+*.tar.gz
+
+

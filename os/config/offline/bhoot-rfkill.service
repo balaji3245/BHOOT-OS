@@ -1,0 +1,15 @@
+[Unit]
+Description=BHOOT Hardware RFKill Wireless and Bluetooth Hard-Block
+DefaultDependencies=no
+Before=sys-subsystem-net-devices.target network-pre.target basic.target
+After=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/rfkill block all
+ExecStartPost=/bin/sh -c 'ip link set dev $(ip link show | grep -E "wl|ww|en|eth" | cut -d: -f2 | tr -d " ") down 2>/dev/null || true'
+
+[Install]
+WantedBy=basic.target
+

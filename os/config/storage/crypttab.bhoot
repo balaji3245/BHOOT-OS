@@ -1,0 +1,4 @@
+# BHOOT dm-crypt / crypttab configuration
+# target_name   source_device                                       key_file   options
+bhoot_data      UUID=B8007001-0003-4000-8000-000000000003           none       luks,discard,no-read-workqueue,no-write-workqueue
+

@@ -1,0 +1,24 @@
+label: gpt
+label-id: B8007001-0000-4000-8000-000000000001
+unit: sectors
+first-lba: 2048
+
+# Partition 1: EFI System Partition (ESP) - FAT32
+# Holds standalone GRUB2 EFI binary, kernel, initramfs, and boot configurations
+start=2048, size=2097152, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, uuid=B8007001-0001-4000-8000-000000000001, name="BHOOT_EFI"
+
+# Partition 2: Read-Only System Root - SquashFS
+# Immutable Debian Bookworm base, desktop shell, Tauri dependencies, SQLCipher runtime
+start=2099200, size=8388608, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=B8007001-0002-4000-8000-000000000002, name="BHOOT_SYSTEM"
+
+# Partition 3: Encrypted Persistent Financial Data - LUKS2 (Argon2id + AES-256-XTS)
+# Houses SQLCipher database, Document Vault ciphertext, audit HMAC chains, and local snapshots
+start=10487808, size=100663296, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=B8007001-0003-4000-8000-000000000003, name="BHOOT_DATA"
+
+# Partition 4: Offline Recovery and Hardware Diagnostics - Read-Only
+# Emergency rescue utilities, memory diagnostic tools, detached header recovery
+start=111151104, size=8388608, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=B8007001-0004-4000-8000-000000000004, name="BHOOT_RECOVERY"
+
+# Remaining ~831 MiB (1,701,888 sectors) is deliberately left unallocated as
+# over-provisioning reserve for USB flash controller wear-leveling and bad-block retirement.
+
