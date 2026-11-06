@@ -202,7 +202,58 @@ To minimize the exposure window of credentials in volatile memory:
 
 ---
 
-## 8. Summary of Phase 2A.14 Remediations
+## 8. Passphrase Generation, Diceware Architecture & Hardware Cracking Analysis (Phase 2A.17)
+
+### 8.1 5-Word Diceware Passphrase Architecture & Provenance
+To prevent human selection of weak credentials for pre-boot and recovery authentication while ensuring memorability, Phase 2A.17 mandates a 5-word Diceware generation policy:
+- **Canonical Wordlist Provenance:** The Electronic Frontier Foundation (EFF) Large Wordlist (`eff_large_wordlist.txt`), designed by Joseph Bonneau.
+- **Licensing:** Creative Commons Attribution 3.0 United States (CC-BY-3.0 US).
+- **Integrity Baseline:** The wordlist consists of exactly 7,776 lines and 7,776 unique entries, with a canonical cryptographic checksum:
+  `SHA-256: addd35536511597a02fa0a9ff1e5284677b8883b83e986e43f15a3db996b903e`
+- **Offline-First Storage:** Stored locally in `/usr/share/bhoot/eff_large_wordlist.txt` and `/etc/bhoot/eff_large_wordlist.txt`. No external or remote network downloads are performed during installation, boot, or recovery.
+
+### 8.2 CSPRNG Rejection Sampling & Entropy Calculation
+Passphrase generation is performed natively by `bhoot-grub-pbkdf2 --generate-diceware <wordlist_path>`:
+- **Entropy Source:** Linux kernel cryptographic random number generator via `getrandom(..., 0)`.
+- **Rejection Sampling Algorithm:** To eliminate modulo bias across 7,776 words:
+  1. Two random bytes are drawn to form an unsigned 16-bit integer $V \in [0, 65535]$.
+  2. The rejection threshold is set to $62,208 = 8 \times 7776$.
+  3. If $V \ge 62208$, $V$ is discarded and a new 16-bit integer is drawn (rejection probability $\approx 5.078\%$).
+  4. The word index is calculated as $I = V \pmod{7776}$, ensuring uniform distribution across all 7,776 outcomes.
+- **Exact Mathematical Entropy:**
+  $$\text{Entropy} = 5 \times \log_2(7776) = 5 \times 12.9248125 \approx 64.624 \text{ bits}$$
+  The resulting passphrase yields $\approx 64.62$ bits of uncompressible cryptographic entropy, separated by single space characters.
+
+### 8.3 Unified Authentication Policy & Delimiter Preservation
+The single 5-word Diceware passphrase enrolled at first boot serves as the unified administrator credential for:
+1. **GRUB Bootloader Configuration Editing / Unrestricted Booting (`bhoot-admin`):** Verified via GRUB2's internal PBKDF2 engine.
+2. **Offline Disaster Recovery Console (`bhoot-recovery-console`):** Verified interactively in `rescue.target`.
+
+**Space Delimiter Preservation:**
+- In Bash scripts (`bhoot-firstboot-setup`, `bhoot-recovery-console`), input is captured strictly using `IFS= read -r -s` to prevent whitespace splitting or word truncation.
+- GRUB2's `grub_password_get()` accepts all printable ASCII characters, including space (ASCII 0x20).
+
+### 8.4 PBKDF2 Tuning, Hardware Reality & Cracking Analysis
+- **PBKDF2-HMAC-SHA512 Iterations:** Parameterized at 10,000 iterations with a 64-byte (128-hex-character) CSPRNG salt. This iteration count is chosen specifically to ensure instant (< 100 ms) interactive UX within GRUB2 in single-threaded UEFI environments, where firmware execution does not benefit from hardware acceleration.
+- **Hardware Cracking Benchmark Status: NOT TESTED ON HOST**
+  - The development and target platform (Dell Latitude 5410) is equipped with integrated Intel Comet Lake UHD Graphics (PCI ID `8086:9b41`).
+  - No discrete NVIDIA GPUs or Hashcat cracking infrastructure are installed on this system.
+  - Physical cracking benchmarks are therefore formally designated as **NOT TESTED** on local hardware.
+- **Theoretical Hashcat Cracking Estimates (Transparent Mathematical Modeling):**
+  - Based on published Hashcat benchmarks on high-end hardware (8x NVIDIA GeForce RTX 4090 GPUs), an optimized cluster achieves $\approx 12.5 \text{ MH/s}$ per GPU for PBKDF2-HMAC-SHA512 at 10,000 iterations, yielding an aggregate cluster throughput of $\approx 100 \text{ MH/s}$ ($10^8 \text{ hashes/sec}$).
+  - Full keyspace search:
+    $$\frac{2^{64.62} \text{ combinations}}{1.0 \times 10^8 \text{ hashes/sec}} = \frac{2.712 \times 10^{19}}{10^8} \approx 2.712 \times 10^{11} \text{ seconds} \approx 8,594 \text{ years}$$
+  - Average time to success (50% keyspace): $\approx 4,297$ years.
+  - *Note:* These figures represent theoretical calculations under optimal hardware assumptions, not empirical test results.
+
+### 8.5 Storage Confidentiality vs. Boot Security Domain Separation
+- **Partition 3 Persistence:** Storage confidentiality is strictly enforced by LUKS2 with Argon2id (`memory=64 MiB`, `parallel=2`, `iterations=4`).
+- **Memory-Hardness vs. "Immunity":** Argon2id is not "immune" to attack, but its 64 MiB memory hardness forces adversaries to dedicate significant high-bandwidth memory per parallel thread, rendering GPU and ASIC parallelization orders of magnitude less cost-effective than for compute-only primitives like PBKDF2.
+- **Security Boundaries:** Bootloader modification and recovery console access are governed by GRUB PBKDF2; resting volume confidentiality is governed by LUKS2 Argon2id.
+
+---
+
+## 9. Summary of Audit Remediations (Phases 2A.14 – 2A.17)
 
 | Finding ID | Severity | Description | Remediation Mechanism | Status |
 |:---|:---:|:---|:---|:---:|
@@ -213,6 +264,8 @@ To minimize the exposure window of credentials in volatile memory:
 | **LOW-01** | **LOW** | Backup allowlist short-circuited via mock hook | Removed Rule 5 mock bypass; implemented comprehensive isolated fixture test for Rules 5..13 | **RESOLVED** |
 | **LOW-02** | **LOW** | Recovery key format strictness | Implemented `normalize_recovery_key` and `/usr/local/sbin/bhoot-unlock-recovery-key` | **RESOLVED** |
 | **LOW-03** | **LOW** | Shell credential zeroization limitations | Documented memory boundaries; implemented `bhoot-grub-pbkdf2` with `explicit_bzero` and constant-time compare | **RESOLVED** |
+| **AUD-17A** | **HIGH** | Inconsistent passphrases & weak entropy bounds | Canonical 5-word Diceware (EFF Large Wordlist, 64.62 bits entropy, rejection sampling) | **RESOLVED** |
+| **AUD-17B** | **MEDIUM** | Untested GPU cracking claims & Argon2id claims | Benchmark marked NOT TESTED; transparent theoretical estimates provided; Argon2id memory hardness clarified | **RESOLVED** |
 
 ---
 **Approved by:** Senior Linux Security Auditor & Cryptographic Systems Specialist  

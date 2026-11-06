@@ -331,11 +331,21 @@ if [ ! -s "$SYSTEM_PERSIST_DIR/machine-id" ]; then
     fi
 fi
 
-# 4. Interactive Owner GRUB Administrator Password Enrollment (Separate from master user password)
+# 4. Interactive Owner GRUB Administrator Password Enrollment (5-Word Diceware 64.6-Bit Entropy)
 echo "========================================================================"
 echo " Establish GRUB Administrator Password for 'bhoot-admin'"
 echo " Required to access offline recovery shell and edit boot parameters."
 echo "========================================================================"
+
+WORDLIST="/usr/share/bhoot/eff_large_wordlist.txt"
+if [ ! -f "$WORDLIST" ]; then
+    WORDLIST="/etc/bhoot/eff_large_wordlist.txt"
+fi
+
+if [ ! -f "$WORDLIST" ]; then
+    echo " [FATAL ERROR] Canonical Diceware wordlist missing from system!" >&2
+    exit 1
+fi
 
 GRUB_TOKEN_FILE="/run/bhoot/grub_provisioning_token"
 
@@ -343,21 +353,39 @@ if [ -f "$GRUB_TOKEN_FILE" ]; then
     GRUB_PASS_INPUT=$(cat "$GRUB_TOKEN_FILE")
     shred -u "$GRUB_TOKEN_FILE" 2>/dev/null || rm -f "$GRUB_TOKEN_FILE"
 else
+    # Verify wordlist integrity
+    if ! /usr/local/bin/bhoot-grub-pbkdf2 --verify-wordlist "$WORDLIST" >/dev/null 2>&1; then
+        echo " [FATAL ERROR] Wordlist integrity check failed (SHA-256 mismatch)!" >&2
+        exit 1
+    fi
+
+    # Generate genuine 5-word Diceware passphrase using CSPRNG and rejection sampling
+    GEN_PASSPHRASE=$(/usr/local/bin/bhoot-grub-pbkdf2 --generate-diceware "$WORDLIST")
+    if [ -z "$GEN_PASSPHRASE" ]; then
+        echo " [FATAL ERROR] Failed to generate cryptographically secure Diceware passphrase!" >&2
+        exit 1
+    fi
+
+    echo ""
+    echo " A cryptographically secure 5-word Diceware passphrase has been generated:"
+    echo " (CSPRNG rejection sampling from canonical 7,776-word list | ~64.62 bits entropy)"
+    echo ""
+    echo "   >>> $GEN_PASSPHRASE <<<"
+    echo ""
+    echo " IMPORTANT: Record this passphrase in an offline password manager or safe."
+    echo " It is required to unlock the Offline Recovery Console and edit GRUB settings."
+    echo "========================================================================"
+    echo ""
+
     while true; do
-        read -s -p " Enter new GRUB administrator password (min 12 chars): " GPASS1
+        IFS= read -r -s -p " Confirm by entering the exact 5-word passphrase: " CONFIRM_PASS
         echo ""
-        if [ ${#GPASS1} -lt 12 ]; then
-            echo " [!] Password too short. Minimum length is 12 characters."
+        if [ "$CONFIRM_PASS" != "$GEN_PASSPHRASE" ]; then
+            echo " [!] Passphrase does not match. Please re-enter carefully."
             continue
         fi
-        read -s -p " Confirm GRUB administrator password: " GPASS2
-        echo ""
-        if [ "$GPASS1" != "$GPASS2" ]; then
-            echo " [!] Passwords do not match. Please try again."
-            continue
-        fi
-        GRUB_PASS_INPUT="$GPASS1"
-        unset GPASS1 GPASS2
+        GRUB_PASS_INPUT="$CONFIRM_PASS"
+        unset CONFIRM_PASS GEN_PASSPHRASE
         break
     done
 fi
@@ -368,31 +396,20 @@ if mount -o remount,rw /boot/efi 2>/dev/null || mount -t vfat -o rw /dev/disk/by
     if [ -x /usr/local/bin/bhoot-grub-pbkdf2 ]; then
         GRUB_AUTH_LINE=$(printf '%s' "$GRUB_PASS_INPUT" | /usr/local/bin/bhoot-grub-pbkdf2)
     else
-        GRUB_AUTH_LINE=$(printf '%s' "$GRUB_PASS_INPUT" | perl -e '
-            use strict;
-            use warnings;
-            use Digest::SHA qw(hmac_sha512);
-            my $pwd = <STDIN>;
-            chomp $pwd;
-            open my $f, "<:raw", "/dev/urandom" or die "urandom error: $!\n";
-            read($f, my $salt_raw, 64) == 64 or die "short read\n";
-            my $salt_hex = uc(unpack("H*", $salt_raw));
-            my $u = hmac_sha512($salt_raw . pack("N", 1), $pwd);
-            my $t = $u;
-            for (my $i = 1; $i < 10000; $i++) {
-                $u = hmac_sha512($u, $pwd);
-                $t ^= $u;
-            }
-            $pwd = "0" x length($pwd);
-            my $hash_hex = uc(unpack("H*", $t));
-            print "password_pbkdf2 bhoot-admin grub.pbkdf2.sha512.10000.${salt_hex}.${hash_hex}\n";
-        ')
+        echo " [FATAL ERROR] bhoot-grub-pbkdf2 utility not found!" >&2
+        exit 1
     fi
-    unset GRUB_PASS_INPUT
 
     if [ -n "$GRUB_AUTH_LINE" ] && [ "${GRUB_AUTH_LINE:0:15}" = "password_pbkdf2" ]; then
         printf '%s\n' "$GRUB_AUTH_LINE" > "$GRUB_AUTH_TMP"
         chmod 0600 "$GRUB_AUTH_TMP" 2>/dev/null || true
+        # Cryptographically verify generated configuration before activation
+        if ! printf '%s' "$GRUB_PASS_INPUT" | /usr/local/bin/bhoot-grub-pbkdf2 --verify-file "$GRUB_AUTH_TMP" >/dev/null 2>&1; then
+            echo " [FATAL ERROR] Self-verification of generated GRUB PBKDF2 hash failed!" >&2
+            rm -f "$GRUB_AUTH_TMP"
+            exit 1
+        fi
+        unset GRUB_PASS_INPUT
         if ! sync "$GRUB_AUTH_TMP"; then
             echo " [ERROR] Failed to sync temporary grub-auth.cfg!" >&2
             rm -f "$GRUB_AUTH_TMP"
@@ -407,6 +424,7 @@ if mount -o remount,rw /boot/efi 2>/dev/null || mount -t vfat -o rw /dev/disk/by
         sync /boot/efi/EFI/BOOT 2>/dev/null || true
         echo " [OK] GRUB administrator authentication configured successfully."
     else
+        unset GRUB_PASS_INPUT
         echo " [ERROR] Failed to compute GRUB PBKDF2 authentication line!" >&2
         exit 1
     fi
@@ -434,6 +452,13 @@ echo "  Compiling and installing bhoot-grub-pbkdf2 helper..."
 mkdir -p "$ROOTFS/usr/local/bin"
 gcc -std=gnu11 -O2 -Wall -Wextra -Werror "$OS_DIR/tools/bhoot-grub-pbkdf2.c" -lcrypto -o "$ROOTFS/usr/local/bin/bhoot-grub-pbkdf2"
 chmod 0755 "$ROOTFS/usr/local/bin/bhoot-grub-pbkdf2"
+
+# Install canonical EFF 7,776-word Diceware list into rootfs
+echo "  Installing canonical EFF 7,776-word Diceware list..."
+mkdir -p "$ROOTFS/usr/share/bhoot" "$ROOTFS/etc/bhoot"
+cp -f "$OS_DIR/config/eff_large_wordlist.txt" "$ROOTFS/usr/share/bhoot/eff_large_wordlist.txt"
+cp -f "$OS_DIR/config/eff_large_wordlist.txt" "$ROOTFS/etc/bhoot/eff_large_wordlist.txt"
+chmod 0644 "$ROOTFS/usr/share/bhoot/eff_large_wordlist.txt" "$ROOTFS/etc/bhoot/eff_large_wordlist.txt"
 
 # Install Authenticated Disaster Recovery Console (HIGH-01 Remediation)
 echo "  Installing authenticated disaster recovery console and emergency tools..."
@@ -519,7 +544,7 @@ AUTH_SUCCESS=0
 while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ]; do
     echo ""
     echo " Recovery Authentication Required (Attempt $ATTEMPT of $MAX_ATTEMPTS)"
-    read -s -p " Enter Administrator Recovery Password: " ENTERED_PASS
+    IFS= read -r -s -p " Enter Administrator Recovery Password: " ENTERED_PASS
     echo ""
 
     if [ -z "$ENTERED_PASS" ]; then

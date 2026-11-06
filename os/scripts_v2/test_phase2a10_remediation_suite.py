@@ -56,21 +56,21 @@ def test_grub_owner_credential_enrollment():
         "Status: UNENROLLED" in esp_content
     )
 
-    # 1.2 First-boot setup prompts separately for GRUB admin password
+    # 1.2 First-boot setup prompts separately for GRUB admin password (or Phase 2A.17 5-word Diceware enrollment)
     firstboot_script = os.path.join(BUILD_REAL, "rootfs/usr/local/sbin/bhoot-firstboot-setup")
     with open(firstboot_script, "r") as f:
         fb_content = f.read()
     report(
         "Firstboot setup prompts for GRUB admin password",
-        "Enter new GRUB administrator password" in fb_content
+        ("Enter new GRUB administrator password" in fb_content or "Confirm by entering the exact 5-word passphrase" in fb_content)
     )
     report(
         "Firstboot setup confirms GRUB admin password twice",
-        "Confirm GRUB administrator password" in fb_content
+        ("Confirm GRUB administrator password" in fb_content or "Confirm by entering the exact 5-word passphrase" in fb_content)
     )
     report(
         "GRUB password piped strictly via STDIN (no argv exposure)",
-        "printf '%s' \"$GRUB_PASS_INPUT\" | perl" in fb_content
+        ("printf '%s' \"$GRUB_PASS_INPUT\" | perl" in fb_content or "printf '%s' \"$GRUB_PASS_INPUT\" | /usr/local/bin/bhoot-grub-pbkdf2" in fb_content)
     )
 
     # 1.3 Genuine PBKDF2-HMAC-SHA512 verification (Positive & Negative)

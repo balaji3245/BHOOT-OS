@@ -91,25 +91,29 @@ cp "$GRUB_CFG" "$MOUNT_POINT/boot/grub/grub.cfg"
 echo "  Staging GRUB administrator authentication configuration..."
 if [ -n "${BHOOT_GRUB_ADMIN_PASS:-}" ]; then
     echo "  Generating GRUB PBKDF2 hash from provided environment token..."
-    GRUB_AUTH_LINE=$(printf '%s' "$BHOOT_GRUB_ADMIN_PASS" | perl -e '
-        use strict;
-        use warnings;
-        use Digest::SHA qw(hmac_sha512);
-        my $pwd = <STDIN>;
-        chomp $pwd;
-        open my $f, "<:raw", "/dev/urandom" or die "urandom error: $!\n";
-        read($f, my $salt_raw, 64) == 64 or die "short read\n";
-        my $salt_hex = uc(unpack("H*", $salt_raw));
-        my $u = hmac_sha512($salt_raw . pack("N", 1), $pwd);
-        my $t = $u;
-        for (my $i = 1; $i < 10000; $i++) {
-            $u = hmac_sha512($u, $pwd);
-            $t ^= $u;
-        }
-        $pwd = "0" x length($pwd);
-        my $hash_hex = uc(unpack("H*", $t));
-        print "password_pbkdf2 bhoot-admin grub.pbkdf2.sha512.10000.${salt_hex}.${hash_hex}\n";
-    ')
+    if [ -x "$OS_DIR/tools/bhoot-grub-pbkdf2" ]; then
+        GRUB_AUTH_LINE=$(printf '%s' "$BHOOT_GRUB_ADMIN_PASS" | "$OS_DIR/tools/bhoot-grub-pbkdf2")
+    else
+        GRUB_AUTH_LINE=$(printf '%s' "$BHOOT_GRUB_ADMIN_PASS" | perl -e '
+            use strict;
+            use warnings;
+            use Digest::SHA qw(hmac_sha512);
+            my $pwd = <STDIN>;
+            chomp $pwd;
+            open my $f, "<:raw", "/dev/urandom" or die "urandom error: $!\n";
+            read($f, my $salt_raw, 64) == 64 or die "short read\n";
+            my $salt_hex = uc(unpack("H*", $salt_raw));
+            my $u = hmac_sha512($salt_raw . pack("N", 1), $pwd);
+            my $t = $u;
+            for (my $i = 1; $i < 10000; $i++) {
+                $u = hmac_sha512($u, $pwd);
+                $t ^= $u;
+            }
+            $pwd = "0" x length($pwd);
+            my $hash_hex = uc(unpack("H*", $t));
+            print "password_pbkdf2 bhoot-admin grub.pbkdf2.sha512.10000.${salt_hex}.${hash_hex}\n";
+        ')
+    fi
     echo "$GRUB_AUTH_LINE" > "$MOUNT_POINT/EFI/BOOT/grub-auth.cfg"
     echo "$GRUB_AUTH_LINE" > "$MOUNT_POINT/boot/grub/grub-auth.cfg"
 else

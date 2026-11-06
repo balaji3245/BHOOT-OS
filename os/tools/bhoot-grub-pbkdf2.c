@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <sys/random.h>
 #include <openssl/evp.h>
@@ -9,6 +10,8 @@
 #define SALT_LEN 64
 #define HASH_LEN 64
 #define PBKDF2_ROUNDS 10000
+#define WORDLIST_SIZE 7776
+#define EXPECTED_EFF_SHA256 "addd35536511597a02fa0a9ff1e5284677b8883b83e986e43f15a3db996b903e"
 
 static int hex_char_to_val(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -50,8 +53,207 @@ static int constant_time_compare(const unsigned char *a, const unsigned char *b,
     return diff == 0 ? 0 : -1;
 }
 
+static int get_csprng_bytes(void *buf, size_t len) {
+    if (getrandom(buf, len, 0) == (ssize_t)len) return 0;
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (!f) return -1;
+    size_t r = fread(buf, 1, len, f);
+    fclose(f);
+    return (r == len) ? 0 : -1;
+}
+
+/* Rejection sampling: draw uniform uint16_t < 62208 (8 * 7776) to eliminate modulo bias */
+static int draw_uniform_word_index(uint16_t *out_idx) {
+    uint16_t val;
+    for (int attempts = 0; attempts < 100; attempts++) {
+        if (get_csprng_bytes(&val, sizeof(val)) != 0) return -1;
+        if (val < 62208) {
+            *out_idx = val % WORDLIST_SIZE;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static int verify_file_sha256(const char *filepath, const char *expected_hex) {
+    FILE *f = fopen(filepath, "rb");
+    if (!f) return -1;
+
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (!ctx) { fclose(f); return -1; }
+    if (!EVP_DigestInit_ex(ctx, EVP_sha256(), NULL)) { EVP_MD_CTX_free(ctx); fclose(f); return -1; }
+
+    unsigned char buf[8192];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        if (!EVP_DigestUpdate(ctx, buf, n)) { EVP_MD_CTX_free(ctx); fclose(f); return -1; }
+    }
+    fclose(f);
+
+    unsigned char digest[32];
+    unsigned int dlen = 0;
+    if (!EVP_DigestFinal_ex(ctx, digest, &dlen)) { EVP_MD_CTX_free(ctx); return -1; }
+    EVP_MD_CTX_free(ctx);
+
+    char hex[65];
+    for (int i = 0; i < 32; i++) {
+        sprintf(hex + i * 2, "%02x", digest[i]);
+    }
+    hex[64] = '\0';
+
+    return (strcmp(hex, expected_hex) == 0) ? 0 : -2;
+}
+
+static int word_cmp(const void *a, const void *b) {
+    return strcmp((const char *)a, (const char *)b);
+}
+
+static int load_and_verify_wordlist(const char *filepath, char words[WORDLIST_SIZE][32]) {
+    if (verify_file_sha256(filepath, EXPECTED_EFF_SHA256) != 0) {
+        fprintf(stderr, "Wordlist SHA-256 verification failed (corrupted or tampered list)\n");
+        return -1;
+    }
+
+    FILE *f = fopen(filepath, "r");
+    if (!f) return -1;
+
+    char line[128];
+    int count = 0;
+    while (fgets(line, sizeof(line), f)) {
+        char *tab = strchr(line, '\t');
+        if (!tab) tab = strchr(line, ' ');
+        const char *w = tab ? tab + 1 : line;
+        char clean_w[32];
+        size_t l = 0;
+        while (w[l] && w[l] != '\r' && w[l] != '\n' && w[l] != ' ' && l < 31) {
+            clean_w[l] = w[l];
+            l++;
+        }
+        clean_w[l] = '\0';
+        if (l == 0) continue;
+        if (count >= WORDLIST_SIZE) { fclose(f); return -2; }
+        strncpy(words[count], clean_w, 32);
+        words[count][31] = '\0';
+        count++;
+    }
+    fclose(f);
+
+    if (count != WORDLIST_SIZE) {
+        fprintf(stderr, "Wordlist entry count mismatch: expected %d, got %d\n", WORDLIST_SIZE, count);
+        return -3;
+    }
+
+    /* Verify uniqueness of all 7,776 words */
+    char sorted[WORDLIST_SIZE][32];
+    memcpy(sorted, words, sizeof(sorted));
+    qsort(sorted, WORDLIST_SIZE, 32, word_cmp);
+    for (int i = 0; i < WORDLIST_SIZE - 1; i++) {
+        if (strcmp(sorted[i], sorted[i + 1]) == 0) {
+            fprintf(stderr, "Duplicate word found in list: %s\n", sorted[i]);
+            explicit_bzero(sorted, sizeof(sorted));
+            return -4;
+        }
+    }
+    explicit_bzero(sorted, sizeof(sorted));
+    return 0;
+}
+
+static int validate_diceware_passphrase(const char *pwd, const char *filepath) {
+    static char words[WORDLIST_SIZE][32];
+    if (load_and_verify_wordlist(filepath, words) != 0) return -1;
+
+    char sorted[WORDLIST_SIZE][32];
+    memcpy(sorted, words, sizeof(sorted));
+    qsort(sorted, WORDLIST_SIZE, 32, word_cmp);
+
+    char copy[512];
+    strncpy(copy, pwd, sizeof(copy) - 1);
+    copy[sizeof(copy) - 1] = '\0';
+
+    int word_count = 0;
+    char *saveptr = NULL;
+    char *token = strtok_r(copy, " ", &saveptr);
+    int all_valid = 1;
+
+    while (token) {
+        word_count++;
+        if (word_count > 5) {
+            all_valid = 0;
+            break;
+        }
+        if (bsearch(token, sorted, WORDLIST_SIZE, 32, word_cmp) == NULL) {
+            all_valid = 0;
+            break;
+        }
+        token = strtok_r(NULL, " ", &saveptr);
+    }
+
+    explicit_bzero(copy, sizeof(copy));
+    explicit_bzero(sorted, sizeof(sorted));
+
+    return (word_count == 5 && all_valid) ? 0 : -2;
+}
+
 int main(int argc, char *argv[]) {
-    if (argc >= 2 && strcmp(argv[1], "--verify") == 0) {
+    if (argc >= 2 && strcmp(argv[1], "--verify-wordlist") == 0) {
+        if (argc != 3) {
+            fprintf(stderr, "Usage: %s --verify-wordlist <wordlist_path>\n", argv[0]);
+            return 1;
+        }
+        static char words[WORDLIST_SIZE][32];
+        if (load_and_verify_wordlist(argv[2], words) != 0) {
+            return 1;
+        }
+        printf("WORDLIST_INTEGRITY_VERIFIED_7776_WORDS\n");
+        return 0;
+    } else if (argc >= 2 && strcmp(argv[1], "--generate-diceware") == 0) {
+        if (argc != 3) {
+            fprintf(stderr, "Usage: %s --generate-diceware <wordlist_path>\n", argv[0]);
+            return 1;
+        }
+        static char words[WORDLIST_SIZE][32];
+        if (load_and_verify_wordlist(argv[2], words) != 0) {
+            return 1;
+        }
+
+        char passphrase[256];
+        passphrase[0] = '\0';
+        for (int i = 0; i < 5; i++) {
+            uint16_t idx;
+            if (draw_uniform_word_index(&idx) != 0) {
+                fprintf(stderr, "CSPRNG error generating word index\n");
+                explicit_bzero(passphrase, sizeof(passphrase));
+                return 1;
+            }
+            if (i > 0) strcat(passphrase, " ");
+            strcat(passphrase, words[idx]);
+        }
+
+        printf("%s\n", passphrase);
+        explicit_bzero(passphrase, sizeof(passphrase));
+        return 0;
+    } else if (argc >= 2 && strcmp(argv[1], "--validate-diceware") == 0) {
+        if (argc != 3) {
+            fprintf(stderr, "Usage: %s --validate-diceware <wordlist_path>\n", argv[0]);
+            return 1;
+        }
+        char pwd[512];
+        int len = read_password_stdin(pwd, sizeof(pwd));
+        if (len < 0) {
+            fprintf(stderr, "Error reading passphrase from STDIN\n");
+            explicit_bzero(pwd, sizeof(pwd));
+            return 1;
+        }
+        int res = validate_diceware_passphrase(pwd, argv[2]);
+        explicit_bzero(pwd, sizeof(pwd));
+        if (res == 0) {
+            printf("DICEWARE_PASSPHRASE_VALID\n");
+            return 0;
+        } else {
+            fprintf(stderr, "DICEWARE_PASSPHRASE_INVALID\n");
+            return 1;
+        }
+    } else if (argc >= 2 && strcmp(argv[1], "--verify") == 0) {
         if (argc != 4) {
             fprintf(stderr, "Usage: %s --verify <salt_hex> <expected_hash_hex>\n", argv[0]);
             return 1;
