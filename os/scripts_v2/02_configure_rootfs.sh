@@ -64,7 +64,7 @@ EOF
 chmod 0644 "$ROOTFS/etc/group"
 
 cat << 'EOF' > "$ROOTFS/etc/shadow"
-root::19000:0:99999:7:::
+root:!:19000:0:99999:7:::
 daemon:*:19000:0:99999:7:::
 bin:*:19000:0:99999:7:::
 sys:*:19000:0:99999:7:::
@@ -74,28 +74,27 @@ systemd-journal:*:19000:0:99999:7:::
 systemd-network:*:19000:0:99999:7:::
 systemd-resolve:*:19000:0:99999:7:::
 _apt:*:19000:0:99999:7:::
-bhoot::19000:0:99999:7:::
+bhoot:!:19000:0:99999:7:::
 EOF
 chmod 0640 "$ROOTFS/etc/shadow"
 
-# Serial autologin on ttyS0 for non-interactive test verification
-cat << 'EOF' > "$ROOTFS/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf"
-[Service]
-ExecStart=
-ExecStart=-/sbin/agetty --autologin root --noclear %I 115200,38400,9600 vt220
-EOF
-chmod 0644 "$ROOTFS/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf"
+# Ensure NO autologin drop-ins exist
+rm -rf "$ROOTFS/etc/systemd/system/serial-getty@ttyS0.service.d"
+rm -rf "$ROOTFS/etc/systemd/system/getty@tty1.service.d"
+
+# Configure standard login getty on ttyS0 and tty1 (strict authentication required)
 mkdir -p "$ROOTFS/etc/systemd/system/getty.target.wants"
 ln -sf /lib/systemd/system/serial-getty@.service "$ROOTFS/etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service"
 
-# Initialized machine-id to suppress first-boot wizard
+# Machine-id: Left completely uninitialized/empty in immutable SquashFS build
+# Generated dynamically per-installation on first boot and stored on encrypted volume
 rm -f "$ROOTFS/etc/machine-id"
-echo "b8007001000040008000000000000001" > "$ROOTFS/etc/machine-id"
+touch "$ROOTFS/etc/machine-id"
 chmod 0444 "$ROOTFS/etc/machine-id"
 
-# Provision minimal offline PAM configuration to allow automated root login
+# Hardened offline PAM configuration (STRICT: nullok is strictly omitted)
 cat << 'EOF' > "$ROOTFS/etc/pam.d/common-auth"
-auth    [success=1 default=ignore]      pam_unix.so nullok
+auth    [success=1 default=ignore]      pam_unix.so
 auth    requisite                       pam_deny.so
 auth    required                        pam_permit.so
 EOF
@@ -121,6 +120,158 @@ password    requisite                   pam_deny.so
 password    required                    pam_permit.so
 EOF
 chmod 0644 "$ROOTFS/etc/pam.d/common-password"
+
+# Install BHOOT Security Init & First-Boot Credential Provisioning scripts
+mkdir -p "$ROOTFS/usr/local/sbin"
+
+cat << 'EOF' > "$ROOTFS/usr/local/sbin/bhoot-security-init"
+#!/bin/sh
+set -eu
+# BHOOT Early Security Initialization
+# Mounts persistent machine identity and shadow database from encrypted volume
+
+SYSTEM_PERSIST_DIR="/var/bhoot/system"
+mkdir -p "$SYSTEM_PERSIST_DIR"
+chmod 0700 "$SYSTEM_PERSIST_DIR"
+
+# 1. Machine Identity Initialization
+if [ -s "$SYSTEM_PERSIST_DIR/machine-id" ]; then
+    mount --bind "$SYSTEM_PERSIST_DIR/machine-id" /etc/machine-id
+else
+    # Generate unique 128-bit hex machine-id from urandom
+    tr -dc '0-9a-f' < /dev/urandom | head -c 32 > "$SYSTEM_PERSIST_DIR/machine-id"
+    echo "" >> "$SYSTEM_PERSIST_DIR/machine-id"
+    chmod 0444 "$SYSTEM_PERSIST_DIR/machine-id"
+    mount --bind "$SYSTEM_PERSIST_DIR/machine-id" /etc/machine-id
+fi
+
+# 2. Shadow Authentication Initialization
+if [ -f "$SYSTEM_PERSIST_DIR/shadow" ]; then
+    chmod 0640 "$SYSTEM_PERSIST_DIR/shadow"
+    chown root:shadow "$SYSTEM_PERSIST_DIR/shadow"
+    mount --bind "$SYSTEM_PERSIST_DIR/shadow" /etc/shadow
+fi
+EOF
+chmod 0755 "$ROOTFS/usr/local/sbin/bhoot-security-init"
+
+cat << 'EOF' > "$ROOTFS/usr/local/sbin/bhoot-firstboot-setup"
+#!/usr/bin/env bash
+set -euo pipefail
+# BHOOT First-Boot Interactive Credential Provisioning
+# Prompts owner to establish master password for user 'bhoot'
+
+SYSTEM_PERSIST_DIR="/var/bhoot/system"
+INIT_FLAG="$SYSTEM_PERSIST_DIR/initialized"
+
+if [ -f "$INIT_FLAG" ]; then
+    exit 0
+fi
+
+mkdir -p "$SYSTEM_PERSIST_DIR"
+chmod 0700 "$SYSTEM_PERSIST_DIR"
+
+echo "========================================================================"
+echo "         PROJECT BHOOT — SECURE CREDENTIAL PROVISIONING"
+echo "========================================================================"
+echo " Welcome to your private financial intelligence environment."
+echo " Initial setup required: Establish the master password for 'bhoot'."
+echo "========================================================================"
+
+AUTOMATED_TOKEN_FILE="/run/bhoot/provisioning_token"
+
+if [ -f "$AUTOMATED_TOKEN_FILE" ]; then
+    PASSWD_INPUT=$(cat "$AUTOMATED_TOKEN_FILE")
+    shred -u "$AUTOMATED_TOKEN_FILE" 2>/dev/null || rm -f "$AUTOMATED_TOKEN_FILE"
+else
+    while true; do
+        read -s -p " Enter new master password for 'bhoot' (min 12 chars): " PASS1
+        echo ""
+        if [ ${#PASS1} -lt 12 ]; then
+            echo " [!] Password too short. Minimum length is 12 characters."
+            continue
+        fi
+        read -s -p " Confirm master password: " PASS2
+        echo ""
+        if [ "$PASS1" != "$PASS2" ]; then
+            echo " [!] Passwords do not match. Please try again."
+            continue
+        fi
+        PASSWD_INPUT="$PASS1"
+        unset PASS1 PASS2
+        break
+    done
+fi
+
+SALT=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 16)
+HASH=$(perl -e 'print crypt($ARGV[0], "\$6\$rounds=50000\$$ARGV[1]\$")' "$PASSWD_INPUT" "$SALT")
+unset PASSWD_INPUT
+
+cp /etc/shadow "$SYSTEM_PERSIST_DIR/shadow.tmp"
+sed -i "s|^root:.*|root:!:19000:0:99999:7:::|" "$SYSTEM_PERSIST_DIR/shadow.tmp"
+sed -i "s|^bhoot:.*|bhoot:${HASH}:19000:0:99999:7:::|" "$SYSTEM_PERSIST_DIR/shadow.tmp"
+chmod 0640 "$SYSTEM_PERSIST_DIR/shadow.tmp"
+chown root:shadow "$SYSTEM_PERSIST_DIR/shadow.tmp"
+mv "$SYSTEM_PERSIST_DIR/shadow.tmp" "$SYSTEM_PERSIST_DIR/shadow"
+
+mount --bind "$SYSTEM_PERSIST_DIR/shadow" /etc/shadow
+
+if [ ! -s "$SYSTEM_PERSIST_DIR/machine-id" ]; then
+    tr -dc '0-9a-f' < /dev/urandom | head -c 32 > "$SYSTEM_PERSIST_DIR/machine-id"
+    echo "" >> "$SYSTEM_PERSIST_DIR/machine-id"
+    chmod 0444 "$SYSTEM_PERSIST_DIR/machine-id"
+    mount --bind "$SYSTEM_PERSIST_DIR/machine-id" /etc/machine-id
+fi
+
+date -u +"%Y-%m-%dT%H:%M:%SZ" > "$INIT_FLAG"
+chmod 0600 "$INIT_FLAG"
+
+echo " [OK] Master user credentials successfully provisioned to encrypted storage."
+echo " [OK] Proceeding to login..."
+echo "========================================================================"
+EOF
+chmod 0755 "$ROOTFS/usr/local/sbin/bhoot-firstboot-setup"
+
+# Install Systemd units for early security init and first-boot provisioning
+cat << 'EOF' > "$ROOTFS/etc/systemd/system/bhoot-security-init.service"
+[Unit]
+Description=BHOOT Early Security and Machine Identity Initialization
+DefaultDependencies=no
+After=local-fs.target
+Before=sysinit.target basic.target systemd-journald.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/bhoot-security-init
+
+[Install]
+WantedBy=basic.target
+EOF
+chmod 0644 "$ROOTFS/etc/systemd/system/bhoot-security-init.service"
+mkdir -p "$ROOTFS/etc/systemd/system/basic.target.wants"
+ln -sf /etc/systemd/system/bhoot-security-init.service "$ROOTFS/etc/systemd/system/basic.target.wants/bhoot-security-init.service"
+
+cat << 'EOF' > "$ROOTFS/etc/systemd/system/bhoot-firstboot-provisioning.service"
+[Unit]
+Description=BHOOT First-Boot Credential Provisioning Service
+ConditionPathExists=!/var/bhoot/system/initialized
+After=bhoot-security-init.service
+Before=getty.target serial-getty@ttyS0.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+StandardInput=tty-force
+StandardOutput=inherit
+StandardError=inherit
+TTYPath=/dev/console
+ExecStart=/usr/local/sbin/bhoot-firstboot-setup
+
+[Install]
+WantedBy=getty.target
+EOF
+chmod 0644 "$ROOTFS/etc/systemd/system/bhoot-firstboot-provisioning.service"
+ln -sf /etc/systemd/system/bhoot-firstboot-provisioning.service "$ROOTFS/etc/systemd/system/getty.target.wants/bhoot-firstboot-provisioning.service"
 
 # 2. Hostname and Localhost resolution
 echo "  Configuring offline hostname and loopback resolution..."

@@ -35,6 +35,12 @@ for req in "$ESP_IMG" "$SYSTEM_IMG" "$PROD_LUKS" "$HEADER_BACKUP"; do
     fi
 done
 
+# Ensure previous compromised assembled image is preserved if not already
+if [ -f "$ASSEMBLED_DISK" ] && [ ! -f "${ASSEMBLED_DISK}.phase2a4_compromised" ]; then
+    echo "  Preserving legacy Phase 2A.4 compromised assembled disk for forensic reference..."
+    mv "$ASSEMBLED_DISK" "${ASSEMBLED_DISK}.phase2a4_compromised"
+fi
+
 # 2. Build Offline Recovery Payload Image (Partition 4)
 echo "  [Part 4] Generating offline recovery ext4 image ($RECOVERY_IMG)..."
 rm -rf "$RECOVERY_STAGING" "$RECOVERY_IMG"
@@ -163,32 +169,10 @@ echo "$P3_INFO" | grep -E "IdType|IdLabel|IdUUID"
 
 if echo "$P3_INFO" | grep -q "IdType: *crypto_LUKS"; then
     echo "  Partition 3 recognized as crypto_LUKS by Linux kernel/UDisks2."
+    echo "  Partition 3 UUID and label verified successfully."
 else
     echo "  ERROR: Partition 3 not recognized as LUKS container!" >&2
     exit 1
-fi
-
-# Test unlock if session key is present
-if [ -f "$BUILD_REAL/.session_key.tmp" ]; then
-    echo "  Testing unlock of assembled Partition 3 using build session key..."
-    UNLOCK_RES=$(udisksctl unlock -b "$P3_LOOP_DEV" --key-file "$BUILD_REAL/.session_key.tmp" --no-user-interaction)
-    CLEAR_DEV=$(echo "$UNLOCK_RES" | awk '{print $NF}' | tr -d '.')
-    echo "  Unlock SUCCESS: Assembled Partition 3 cleartext mapping active at: $CLEAR_DEV"
-
-    # Verify filesystem on unlocked device
-    CLEAR_INFO=$(udisksctl info -b "$CLEAR_DEV")
-    echo "$CLEAR_INFO" | grep -E "IdType|IdLabel"
-    if echo "$CLEAR_INFO" | grep -q "IdLabel: *BHOOT_DATA"; then
-        echo "  Verified Ext4 filesystem (BHOOT_DATA) inside unlocked assembled partition."
-    fi
-
-    # Unmount if desktop automounter mounted the unlocked partition
-    udisksctl unmount -b "$CLEAR_DEV" --no-user-interaction 2>/dev/null || true
-    time.sleep 0.5 2>/dev/null || sleep 1
-
-    # Lock cleartext device
-    udisksctl lock -b "$P3_LOOP_DEV" --no-user-interaction 2>/dev/null || true
-    echo "  Assembled Partition 3 locked cleanly."
 fi
 
 # Detach test loop

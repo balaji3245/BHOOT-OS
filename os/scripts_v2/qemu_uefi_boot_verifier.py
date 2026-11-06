@@ -23,7 +23,14 @@ BUILD_REAL = os.path.join(OS_DIR, "build_real")
 DISK_IMG = os.path.join(BUILD_REAL, "bhoot_disk_assembled.img")
 SERIAL_LOG = os.path.join(BUILD_REAL, "qemu_boot_serial.log")
 OVMF_PATH = "/usr/share/OVMF/OVMF_CODE_4M.fd"
-TEST_PASSPHRASE = os.environ.get("BHOOT_TEST_PASSPHRASE", "BhootTestPassphrase2026!")
+# Ephemeral test passphrase passed via secure memory environment, NEVER hardcoded
+TEST_PASSPHRASE = os.environ.get("BHOOT_PASSPHRASE")
+if not TEST_PASSPHRASE:
+    # If not provided via env, attempt to read from anonymous unbuffered pipe (fd 3)
+    try:
+        TEST_PASSPHRASE = os.fdopen(3).readline().strip()
+    except Exception:
+        TEST_PASSPHRASE = None
 
 stages = {
     "1_uefi_ovmf": False,
@@ -126,11 +133,14 @@ try:
             log_event("STAGE 7 PASS: Live-boot LUKS2 encryption prompt appeared.")
 
             if not passphrase_sent:
-                log_event(f"Delivering LUKS test passphrase to /dev/vda3 prompt...")
-                time.sleep(0.5)
-                child.sendline(TEST_PASSPHRASE)
-                passphrase_sent = True
-                buffer += "\n[TEST HARNESS: Sent Passphrase]\n"
+                if TEST_PASSPHRASE:
+                    log_event("Delivering LUKS test passphrase to /dev/vda3 prompt...")
+                    time.sleep(0.5)
+                    child.sendline(TEST_PASSPHRASE)
+                    passphrase_sent = True
+                    buffer += "\n[TEST HARNESS: Sent Passphrase]\n"
+                else:
+                    log_event("Awaiting manual passphrase entry (none provided in test harness)...")
 
         # Stage 8: LUKS Persistence Unlock
         if passphrase_sent and not stages["8_luks_persistence_unlock"]:

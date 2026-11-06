@@ -53,7 +53,7 @@ echo "  Compiling standalone UEFI GRUB binary (BOOTX64.EFI) with embedded early 
 grub-mkstandalone \
     -O x86_64-efi \
     -o "$BOOTX64_EFI" \
-    --modules="part_gpt part_msdos fat ext2 normal linux echo search search_fs_uuid search_label test all_video gfxterm font serial terminfo gzio" \
+    --modules="part_gpt part_msdos fat ext2 normal linux echo search search_fs_uuid search_label test all_video gfxterm font serial terminfo gzio password password_pbkdf2 crypto gcry_sha512" \
     "boot/grub/grub.cfg=$EARLY_CFG"
 
 echo "  Standalone UEFI binary generated: $(stat -c %s "$BOOTX64_EFI") bytes"

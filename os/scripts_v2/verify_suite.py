@@ -369,14 +369,13 @@ with open(MANIFEST_FILE, "w") as out:
 
 check(f"Manifest written to {MANIFEST_FILE}", os.path.isfile(MANIFEST_FILE))
 
-# Securely remove temporary session key
-session_key_tmp = os.path.join(BUILD_REAL, ".session_key.tmp")
-if os.path.exists(session_key_tmp):
-    os.remove(session_key_tmp)
+# Verify zero temporary session key files exist on disk
+key_scratch_files = [f for f in os.listdir(BUILD_REAL) if f.startswith(".session") or f.endswith(".key")]
+check("Zero temporary plaintext session key files exist on disk", len(key_scratch_files) == 0)
 
 print("\n" + "=" * 72)
 if failed == 0:
-    print(f" [Phase 2A.3 - Step 07] ALL {passed} FORENSIC VERIFICATIONS PASSED!")
+    print(f" [Phase 2A.6 - Step 07] ALL {passed} FORENSIC VERIFICATIONS PASSED!")
     print("=" * 72)
     sys.exit(0)
 else:

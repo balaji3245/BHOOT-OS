@@ -26,6 +26,11 @@ dist-ssr/
 *.pem
 *.secret
 *.asc
+*.passphrase
+*.recovery_key
+*.session_key*
+.session_key.tmp
+*.phase2a4_compromised
 .env
 .env.*
 !.env.example
