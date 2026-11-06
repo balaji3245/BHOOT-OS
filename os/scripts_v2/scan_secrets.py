@@ -46,6 +46,8 @@ ALLOWLIST_FILES = {
     "PHASE_2A_8_REMEDIATION_REPORT.md",
     "PHASE_2A_9_INDEPENDENT_SOURCE_SECURITY_AUDIT.md",
     "PHASE_2A_10_REMEDIATION_REPORT.md",
+    "PHASE_2A_11_INDEPENDENT_SECURITY_AUDIT.md",
+    "PHASE_2A_12_REMEDIATION_REPORT.md",
     "transcript.jsonl",
     "transcript_full.jsonl",
     ".gitignore",

@@ -230,6 +230,19 @@ else
 fi
 
 # 1. Native yescrypt password hash generation (strictly piped via STDIN)
+# Cryptographic salt encoding details:
+# - Salt input: 16 bytes (128 bits) CSPRNG entropy read from /dev/urandom.
+# - Output encoding: Standard libxcrypt 22-character B64 format for $y$ yescrypt:
+#   * Bytes 0..14 (15 bytes = 120 bits): 5 groups of 3 bytes packed into 20 B64 characters.
+#     Characters 0..19 are uniformly distributed across the 64-character alphabet:
+#     "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".
+#   * Byte 15 (8 bits = bits 120..127):
+#     - Lower 6 bits (w15 & 0x3f) form Character 20 (uniformly distributed across 64 chars).
+#     - Upper 2 bits ((w15 >> 6) & 0x3f) form Character 21 (values 0..3: '.', '/', '0', '1').
+#     - Total characters: 20 + 1 + 1 = 22 characters.
+#     - Total entropy: 20*6 + 6 + 2 = 128 bits.
+# - The 2-bit boundary of the 22nd character is strictly compliant with libxcrypt's
+#   crypt_gensalt() specification for yescrypt ($y$j9T$...) and PAM pam_unix.so.
 HASH=$(printf '%s' "$PASSWD_INPUT" | perl -e '
     use strict;
     use warnings;

@@ -482,6 +482,20 @@ def main():
             log_event(f"Preserving test logs and artifacts in {DISPOSABLE_DIR} for forensic inspection.")
         else:
             log_event("Cleaning up disposable test artifacts...")
+            # Ensure no lingering loop devices remain attached to disposable images before file removal
+            try:
+                for fname in ["bhoot_test_assembled.img", "bhoot_test_p3.img"]:
+                    fpath = os.path.join(DISPOSABLE_DIR, fname)
+                    if os.path.exists(fpath):
+                        p = subprocess.run(["losetup", "-j", fpath], capture_output=True, text=True)
+                        for line in p.stdout.strip().splitlines():
+                            if line:
+                                dev = line.split(":", 1)[0].strip()
+                                subprocess.run(["udisksctl", "unmount", "-b", dev, "--no-user-interaction"], capture_output=True)
+                                subprocess.run(["udisksctl", "lock", "-b", dev, "--no-user-interaction"], capture_output=True)
+                                subprocess.run(["udisksctl", "loop-delete", "-b", dev, "--no-user-interaction"], capture_output=True)
+            except Exception as e:
+                log_event(f"Warning during loop check: {e}")
             shutil.rmtree(DISPOSABLE_DIR, ignore_errors=True)
             log_event("Cleanup complete.")
 

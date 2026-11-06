@@ -149,6 +149,9 @@ fi
 echo "  Verified Partition 4 (BHOOT_RECOVERY) Ext4 superblock magic (0xef53) at sector 111151104."
 
 # 7. Verify Partition 3 inside the Assembled Disk Image can be directly probed and unlocked
+# SAFETY INVARIANT: Whole-disk loop setup via UDisks is strictly forbidden to prevent
+# kernel partition scans, GVFS automounting, and desktop LUKS passphrase popups.
+# Verification must use strict partition-bounded offset and size limits only.
 echo "  Verifying Partition 3 within assembled disk image via loop offset..."
 P3_OFFSET_BYTES=$(( 10487808 * 512 ))
 P3_SIZE_BYTES=$(( 100663296 * 512 ))
@@ -158,10 +161,12 @@ P3_LOOP_DEV=$(echo "$P3_LOOP_OUT" | awk '{print $NF}' | tr -d '.')
 echo "  Partition 3 attached as: $P3_LOOP_DEV"
 
 cleanup_p3() {
-    udisksctl lock -b "$P3_LOOP_DEV" --no-user-interaction 2>/dev/null || true
-    udisksctl loop-delete -b "$P3_LOOP_DEV" --no-user-interaction 2>/dev/null || true
+    if [ -n "${P3_LOOP_DEV:-}" ] && [ -b "$P3_LOOP_DEV" ]; then
+        udisksctl lock -b "$P3_LOOP_DEV" --no-user-interaction 2>/dev/null || true
+        udisksctl loop-delete -b "$P3_LOOP_DEV" --no-user-interaction 2>/dev/null || true
+    fi
 }
-trap cleanup_p3 EXIT
+trap cleanup_p3 EXIT INT TERM HUP ERR
 
 # Check UDisks recognition
 P3_INFO=$(udisksctl info -b "$P3_LOOP_DEV")
@@ -176,8 +181,9 @@ else
 fi
 
 # Detach test loop
+udisksctl lock -b "$P3_LOOP_DEV" --no-user-interaction 2>/dev/null || true
 udisksctl loop-delete -b "$P3_LOOP_DEV" --no-user-interaction 2>/dev/null || true
-trap - EXIT
+trap - EXIT INT TERM HUP ERR
 
 echo "  Assembled disk image characteristics:"
 ls -lh "$ASSEMBLED_DISK"

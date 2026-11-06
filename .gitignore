@@ -62,6 +62,7 @@ __pycache__/
 # OS Images and Build Artifacts (Phase 2)
 /os/build/
 /os/build_real/
+os/tools/bhoot-grub-pbkdf2
 *.img
 *.iso
 *.squashfs

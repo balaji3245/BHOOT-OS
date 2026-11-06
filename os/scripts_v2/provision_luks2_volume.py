@@ -219,11 +219,17 @@ def setup_ext4_filesystem(container_path: str, master_passphrase: str):
         time.sleep(0.3)
 
     finally:
-        if mnt_pt and os.path.ismount(mnt_pt):
-            subprocess.run(["udisksctl", "unmount", "-b", clear_dev, "--no-user-interaction"], capture_output=True)
+        # Strict teardown: unmount all cleartext/loop mounts, lock dm-crypt, and delete loopback device
         if clear_dev and os.path.exists(clear_dev):
+            subprocess.run(["udisksctl", "unmount", "-b", clear_dev, "--no-user-interaction"], capture_output=True)
+            time.sleep(0.2)
+        if loop_dev and os.path.exists(loop_dev):
+            find_res = subprocess.run(["findmnt", "-n", "-o", "TARGET", loop_dev], capture_output=True, text=True)
+            if find_res.stdout.strip():
+                subprocess.run(["udisksctl", "unmount", "-b", loop_dev, "--no-user-interaction"], capture_output=True)
             subprocess.run(["udisksctl", "lock", "-b", loop_dev, "--no-user-interaction"], capture_output=True)
-        subprocess.run(["udisksctl", "loop-delete", "-b", loop_dev, "--no-user-interaction"], capture_output=True)
+            time.sleep(0.2)
+            subprocess.run(["udisksctl", "loop-delete", "-b", loop_dev, "--no-user-interaction"], capture_output=True)
 
 
 def main():

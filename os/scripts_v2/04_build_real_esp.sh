@@ -66,14 +66,12 @@ echo "  Attached as: $LOOP_DEV"
 
 cleanup() {
     echo "  Cleaning up ESP loop mount..."
-    if [ -n "${MOUNT_POINT:-}" ] && [ -d "$MOUNT_POINT" ]; then
+    if [ -n "${LOOP_DEV:-}" ] && [ -b "$LOOP_DEV" ]; then
         udisksctl unmount -b "$LOOP_DEV" --no-user-interaction 2>/dev/null || true
-    fi
-    if [ -n "${LOOP_DEV:-}" ]; then
         udisksctl loop-delete -b "$LOOP_DEV" --no-user-interaction 2>/dev/null || true
     fi
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM HUP ERR
 
 MOUNT_OUT=$(udisksctl mount -b "$LOOP_DEV" --no-user-interaction)
 MOUNT_POINT=$(echo "$MOUNT_OUT" | awk '{print $NF}' | tr -d '.')
@@ -170,9 +168,9 @@ echo "  Kernel size:   $VMLINUZ_SIZE bytes (verified genuine)"
 echo "  Initramfs size: $INITRD_SIZE bytes (verified genuine)"
 
 # 8. Unmount cleanly
-udisksctl unmount -b "$LOOP_DEV" --no-user-interaction
-udisksctl loop-delete -b "$LOOP_DEV" --no-user-interaction
-trap - EXIT
+udisksctl unmount -b "$LOOP_DEV" --no-user-interaction 2>/dev/null || true
+udisksctl loop-delete -b "$LOOP_DEV" --no-user-interaction 2>/dev/null || true
+trap - EXIT INT TERM HUP ERR
 
 echo "========================================================================"
 echo " [Phase 2A.2 - Step 04] Genuine EFI System Partition Build Complete"

@@ -26,6 +26,7 @@ def format_and_populate(container_path: str, passphrase: str):
         kf.write(passphrase)
         kfname = kf.name
 
+    clear_dev = None
     try:
         print("    Unlocking LUKS2 container via udisksctl...")
         res2 = subprocess.run(
@@ -117,6 +118,11 @@ def format_and_populate(container_path: str, passphrase: str):
     finally:
         if os.path.exists(kfname):
             os.remove(kfname)
+        if clear_dev and os.path.exists(clear_dev):
+            subprocess.run(["udisksctl", "unmount", "-b", clear_dev, "--no-user-interaction"], capture_output=True)
+        if loop_dev and os.path.exists(loop_dev):
+            subprocess.run(["udisksctl", "lock", "-b", loop_dev, "--no-user-interaction"], capture_output=True)
+            subprocess.run(["udisksctl", "loop-delete", "-b", loop_dev, "--no-user-interaction"], capture_output=True)
 
 
 def test_disaster_recovery(source_container: str, passphrase: str, header_backup_path: str):
@@ -166,6 +172,7 @@ def test_disaster_recovery(source_container: str, passphrase: str, header_backup
             kf.write(passphrase)
             kfname = kf.name
 
+        test_loop = None
         try:
             loop_out = subprocess.run(
                 ["udisksctl", "loop-setup", "--file", disposable_img, "--no-user-interaction"],
@@ -185,9 +192,13 @@ def test_disaster_recovery(source_container: str, passphrase: str, header_backup
             subprocess.run(["udisksctl", "lock", "-b", test_loop, "--no-user-interaction"], check=False)
             time.sleep(0.5)
             subprocess.run(["udisksctl", "loop-delete", "-b", test_loop, "--no-user-interaction"], check=False)
+            test_loop = None
         finally:
             if os.path.exists(kfname):
                 os.remove(kfname)
+            if test_loop and os.path.exists(test_loop):
+                subprocess.run(["udisksctl", "lock", "-b", test_loop, "--no-user-interaction"], capture_output=True)
+                subprocess.run(["udisksctl", "loop-delete", "-b", test_loop, "--no-user-interaction"], capture_output=True)
 
         print("    Detached header disaster recovery cycle PASSED 100%!")
 
