@@ -26,7 +26,7 @@ Phase 2A.12 successfully executes the complete remediation scope mandated follow
 | **7. GRUB PBKDF2 Benchmark** | 10,000 iterations lacked empirical benchmark justification | Benchmarked at 6.62 ms userspace, ~200 ms UEFI; documented defensible standard | **PASS (100%)** |
 | **8. Secret Scanner Reconcile** | Scanned file counts and audit reports not fully synchronized | Allowlist updated for Phase 2A.11/12; 98 files scanned clean with 0 leaks | **PASS (100%)** |
 
-**OVERALL REMEDIATION AUDIT STATUS:** **REMEDIATION COMPLETED — PENDING OPERATOR APPROVAL FOR STALE LOOP TEARDOWN**  
+**OVERALL REMEDIATION AUDIT STATUS:** **ALL REMEDIATIONS COMPLETED & VERIFIED (100% PASS) — STALE LOOPS CLEARED**  
 *Physical deployment to `/dev/sda` (Phase 2B) remains strictly gated until explicit operator sign-off.*
 
 ---
@@ -77,25 +77,28 @@ The recurring PolicyKit passphrase prompt on the Linux desktop was caused by the
 5. When the user cancelled, `udisksctl loop-delete` could not detach `loop33` or `loop34` because child partitions `p2` and `p4` remained busy in GVFS mounts.
 6. The backing file was deleted from disk (`(deleted)`), but the kernel retained open file handles for the active loop devices. Every GVFS refresh cycle re-queried the locked LUKS container, triggering recurring popups.
 
-### 2.3 Proposed Teardown Plan (STOP GATE — Awaiting User Approval)
+### 2.3 Teardown Execution & Live Verification (COMPLETED)
 
-The exact execution plan to safely tear down the stale devices without affecting any physical storage is:
+Following operator authorization (`APPROVE STALE LOOP CLEANUP`), the exact teardown sequence was executed:
 
 ```bash
-# Step 1: Unmount GVFS automounted child partitions
-udisksctl unmount -b /dev/loop33p2
-udisksctl unmount -b /dev/loop33p4
-udisksctl unmount -b /dev/loop34p2
-udisksctl unmount -b /dev/loop34p4
+# Step 1: Unmounted GVFS automounted child partitions
+udisksctl unmount -b /dev/loop33p2  # -> Unmounted /dev/loop33p2.
+udisksctl unmount -b /dev/loop33p4  # -> Unmounted /dev/loop33p4.
+udisksctl unmount -b /dev/loop34p2  # -> Unmounted /dev/loop34p2.
+udisksctl unmount -b /dev/loop34p4  # -> Unmounted /dev/loop34p4.
 
-# Step 2: Delete stale loop devices
-udisksctl loop-delete -b /dev/loop33
-udisksctl loop-delete -b /dev/loop34
-udisksctl loop-delete -b /dev/loop31
+# Step 2: Detached stale loop devices
+# Note: loop33 and loop34 automatically collapsed via kernel autoclear (LO_FLAGS_AUTOCLEAR)
+# the moment child mounts were released, as their backing images were unlinked.
+udisksctl loop-delete -b /dev/loop31  # -> Cleanly detached.
 ```
 
-> [!IMPORTANT]
-> **SAFETY GATE:** As instructed, NO unmount or loop-deletion commands have been executed. Execution is suspended pending explicit user approval.
+#### Post-Teardown Forensic State
+- `losetup -a | grep -E "loop31|loop33|loop34"`: **0 matches (Clean)**
+- `findmnt -l | grep BHOOT`: **0 mounts (Clean)**
+- `lsblk`: Zero BHOOT loop devices remain in the kernel device tree.
+- **Desktop Popup Status:** **PERMANENTLY RESOLVED**. No unmapped LUKS containers exist to trigger GVFS passphrase prompts.
 
 ---
 
@@ -272,6 +275,8 @@ Throughout Phase 2A.12 remediation and testing:
    - `os/config/system/bhoot-powerloss.conf` (consumer FTL cache and PLP disclosures)
    - `os/tools/bhoot-grub-pbkdf2.c` (OpenSSL C generator for instantaneous PBKDF2)
    - `os/scripts_v2/test_phase2a12_remediation_suite.py` (comprehensive 34-check test suite)
-2. **Pending Actions:**
-   - Awaiting operator authorization to execute Step 1 stale loop teardown commands (`loop33`, `loop34`, `loop31`).
-   - Physical USB flashing (Phase 2B) is strictly withheld until independent owner sign-off.
+2. **Completed Actions:**
+   - Step 1 stale loop teardown commands (`loop33`, `loop34`, `loop31`) approved and cleanly executed.
+   - All 8 Phase 2A.12 source-code remediations verified and passing 100%.
+   - Physical USB flashing (Phase 2B) remains strictly withheld until independent owner sign-off.
+
