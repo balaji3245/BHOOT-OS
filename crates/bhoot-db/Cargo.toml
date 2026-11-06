@@ -11,9 +11,15 @@ workspace = true
 [dependencies]
 bhoot-core = { workspace = true }
 bhoot-crypto = { workspace = true }
+bhoot-audit = { workspace = true }
+bhoot-vault = { workspace = true }
+rusqlite = { version = "0.41", features = ["bundled-sqlcipher", "chrono", "uuid"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 

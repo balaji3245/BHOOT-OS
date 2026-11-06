@@ -45,6 +45,7 @@ secrecy = { version = "0.10", features = ["serde"] }
 
 # Testing
 proptest = "1.6"
+tempfile = "3.17"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
