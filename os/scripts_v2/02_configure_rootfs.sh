@@ -6,6 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OS_DIR="$(dirname "$SCRIPT_DIR")"
+REPO_ROOT="$(dirname "$OS_DIR")"
 BUILD_REAL="$OS_DIR/build_real"
 ROOTFS="$BUILD_REAL/rootfs"
 CONFIG_DIR="$OS_DIR/config"
@@ -837,7 +838,39 @@ bhoot_data      UUID=B8007001-0003-4000-8000-000000000003           none       l
 EOF
 chmod 0600 "$ROOTFS/etc/crypttab"
 
-# 10. Mask Telemetry, Cloud-Init, and Networking Services
+# 10. Install BHOOT Desktop Application and Update Manager
+echo "  Installing BHOOT Desktop application and system update manager..."
+if [ -f "$REPO_ROOT/target/release/bhoot-desktop" ]; then
+    cp "$REPO_ROOT/target/release/bhoot-desktop" "$ROOTFS/usr/local/bin/bhoot-desktop"
+    chmod 0755 "$ROOTFS/usr/local/bin/bhoot-desktop"
+fi
+if [ -f "$SCRIPT_DIR/bhoot_sysupdate.py" ]; then
+    cp "$SCRIPT_DIR/bhoot_sysupdate.py" "$ROOTFS/usr/local/bin/bhoot-sysupdate"
+    chmod 0755 "$ROOTFS/usr/local/bin/bhoot-sysupdate"
+fi
+
+cat << 'EOF' > "$ROOTFS/etc/systemd/system/bhoot-desktop.service"
+[Unit]
+Description=BHOOT Personal Financial Operating System Desktop Engine
+After=basic.target bhoot-security-init.service
+Wants=basic.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/bhoot-desktop --port 1420 --db /var/bhoot/data/bhoot.db
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+chmod 0644 "$ROOTFS/etc/systemd/system/bhoot-desktop.service"
+mkdir -p "$ROOTFS/etc/systemd/system/multi-user.target.wants"
+ln -sf /etc/systemd/system/bhoot-desktop.service "$ROOTFS/etc/systemd/system/multi-user.target.wants/bhoot-desktop.service"
+
+# 11. Mask Telemetry, Cloud-Init, and Networking Services
 echo "  Masking telemetry, auto-updaters, and unneeded network services..."
 while IFS= read -r service || [ -n "$service" ]; do
     [[ "$service" =~ ^#.*$ ]] && continue
