@@ -156,4 +156,46 @@ impl VaultStore {
     pub fn get_metadata(&self, document_id: &Uuid) -> Option<&VaultDocument> {
         self.documents.get(document_id)
     }
+
+    /// List all documents stored in the vault.
+    #[must_use]
+    pub fn list_documents(&self) -> Vec<&VaultDocument> {
+        self.documents.values().collect()
+    }
+
+    /// Delete a document by ID and reclaim memory.
+    pub fn delete_document(&mut self, document_id: &Uuid) -> bool {
+        if let Some(doc) = self.documents.remove(document_id) {
+            self.hash_index.remove(&doc.blake3_hash);
+            self.total_stored_bytes = self.total_stored_bytes.saturating_sub(doc.file_size_bytes);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Run full integrity audit decrypting and verifying all stored documents.
+    pub fn verify_all_documents(&self, vault_key: &[u8; 32]) -> crate::document::VaultIntegrityReport {
+        let total = self.documents.len();
+        let mut verified = 0;
+        let mut corrupted = 0;
+        let mut corrupted_ids = Vec::new();
+
+        for (id, doc) in &self.documents {
+            match doc.verify_integrity(vault_key) {
+                Ok(true) => verified += 1,
+                _ => {
+                    corrupted += 1;
+                    corrupted_ids.push(*id);
+                }
+            }
+        }
+
+        crate::document::VaultIntegrityReport {
+            total_documents: total,
+            verified_documents: verified,
+            corrupted_documents: corrupted,
+            corrupted_ids,
+        }
+    }
 }

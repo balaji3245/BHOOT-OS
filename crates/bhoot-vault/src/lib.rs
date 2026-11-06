@@ -3,7 +3,7 @@ pub mod error;
 pub mod mime;
 pub mod store;
 
-pub use document::VaultDocument;
+pub use document::{VaultDocument, VaultIntegrityReport};
 pub use error::VaultError;
 pub use mime::DocumentMimeType;
 pub use store::{VaultStore, MAX_DOCUMENT_SIZE_BYTES};
@@ -72,5 +72,40 @@ mod tests {
 
         let meta = vault.get_metadata(&id1).unwrap();
         assert_eq!(meta.linked_transaction_ids.len(), 2);
+    }
+
+    #[test]
+    fn test_vault_integrity_audit_and_export() {
+        let mut vault = VaultStore::new();
+        let key = [0x55u8; 32];
+        let wrong_key = [0x11u8; 32];
+
+        let pdf_data = b"%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\nxref\n0 1\n0000000000 65535 f\ntrailer << /Root 1 0 R >>\nstartxref\n50\n%%EOF".to_vec();
+        let doc_id = vault.store_document("statement.pdf", &pdf_data, &key, None).unwrap();
+
+        // 1. Audit with correct key -> All verified
+        let audit = vault.verify_all_documents(&key);
+        assert_eq!(audit.total_documents, 1);
+        assert_eq!(audit.verified_documents, 1);
+        assert_eq!(audit.corrupted_documents, 0);
+
+        // 2. Audit with wrong key -> Flags corrupted
+        let audit_wrong = vault.verify_all_documents(&wrong_key);
+        assert_eq!(audit_wrong.corrupted_documents, 1);
+        assert_eq!(audit_wrong.corrupted_ids, vec![doc_id]);
+
+        // 3. Export to disk file
+        let doc = vault.get_metadata(&doc_id).unwrap();
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let bytes_written = doc.export_to_file(&key, temp.path()).unwrap();
+        assert_eq!(bytes_written, pdf_data.len());
+
+        let read_back = std::fs::read(temp.path()).unwrap();
+        assert_eq!(read_back, pdf_data);
+
+        // 4. Delete document
+        assert!(vault.delete_document(&doc_id));
+        assert_eq!(vault.len(), 0);
+        assert_eq!(vault.total_stored_bytes(), 0);
     }
 }
