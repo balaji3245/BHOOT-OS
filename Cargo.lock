@@ -92,6 +92,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "bhoot-backup"
+version = "0.1.0"
+dependencies = [
+ "bhoot-audit",
+ "bhoot-core",
+ "bhoot-crypto",
+ "bhoot-db",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "bhoot-core"
 version = "0.1.0"
 dependencies = [

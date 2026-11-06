@@ -5,6 +5,7 @@ members = [
     "crates/bhoot-db",
     "crates/bhoot-audit",
     "crates/bhoot-vault",
+    "crates/bhoot-backup",
 ]
 resolver = "2"
 
@@ -22,6 +23,7 @@ bhoot-crypto = { path = "crates/bhoot-crypto" }
 bhoot-db = { path = "crates/bhoot-db" }
 bhoot-audit = { path = "crates/bhoot-audit" }
 bhoot-vault = { path = "crates/bhoot-vault" }
+bhoot-backup = { path = "crates/bhoot-backup" }
 
 # Serialization & Identifiers
 serde = { version = "1.0", features = ["derive"] }

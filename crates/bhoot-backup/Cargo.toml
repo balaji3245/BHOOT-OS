@@ -1,0 +1,25 @@
+[package]
+name = "bhoot-backup"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bhoot-crypto = { workspace = true }
+bhoot-audit = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+bhoot-db = { workspace = true }
+bhoot-core = { workspace = true }
