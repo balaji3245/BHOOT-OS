@@ -70,12 +70,26 @@ EOF
 cat << 'EOF' > "$RECOVERY_STAGING/restore_header.sh"
 #!/bin/sh
 set -eu
-TARGET_DEV="${1:-/dev/disk/by-partuuid/B8007001-0003-4000-8000-000000000003}"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BACKUP_FILE="$SCRIPT_DIR/bhoot_luks_header.backup"
+TARGET_DEV="${1:-}"
+if [ -z "$TARGET_DEV" ]; then
+    for candidate in /dev/disk/by-partuuid/B8007001-0003-4000-8000-000000000003 /dev/disk/by-label/BHOOT_DATA /dev/vda3 /dev/sda3; do
+        if [ -b "$candidate" ]; then
+            TARGET_DEV="$candidate"
+            break
+        fi
+    done
+fi
 
-if [ ! -b "$TARGET_DEV" ]; then
-    echo "ERROR: Target LUKS block device $TARGET_DEV not found!" >&2
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BACKUP_FILE="${2:-$SCRIPT_DIR/bhoot_luks_header.backup}"
+
+if [ -z "$TARGET_DEV" ] || [ ! -b "$TARGET_DEV" ]; then
+    echo "ERROR: Target LUKS block device not found!" >&2
+    exit 1
+fi
+
+if [ ! -f "$BACKUP_FILE" ]; then
+    echo "ERROR: Header backup file not found at: $BACKUP_FILE" >&2
     exit 1
 fi
 
@@ -84,6 +98,11 @@ cryptsetup luksHeaderRestore "$TARGET_DEV" --header-backup-file "$BACKUP_FILE" -
 echo "Header restore completed successfully."
 EOF
 chmod +x "$RECOVERY_STAGING/restore_header.sh"
+
+if [ -f "$BUILD_REAL/rootfs/usr/local/sbin/bhoot-unlock-recovery-key" ]; then
+    cp "$BUILD_REAL/rootfs/usr/local/sbin/bhoot-unlock-recovery-key" "$RECOVERY_STAGING/bhoot-unlock-recovery-key"
+    chmod +x "$RECOVERY_STAGING/bhoot-unlock-recovery-key"
+fi
 
 truncate -s $(( 32 * 1024 * 1024 )) "$RECOVERY_IMG"
 mkfs.ext4 -F -q -L "BHOOT_REC" -d "$RECOVERY_STAGING" "$RECOVERY_IMG"

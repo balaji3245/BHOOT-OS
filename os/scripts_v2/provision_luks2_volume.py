@@ -42,21 +42,30 @@ def generate_recovery_key() -> str:
     return "-".join(chunks)
 
 
+def normalize_recovery_key(key_input: str) -> str:
+    """Normalize recovery key input to canonical 16x4 chunked format.
+    
+    Accepts raw 64-character hex strings, lowercase, uppercase, with or without
+    delimiters (spaces, hyphens, colons, underscores).
+    Returns canonical format: XXXX-XXXX-...-XXXX (79 characters).
+    """
+    import re
+    cleaned = re.sub(r"[^0-9a-fA-F]", "", key_input).upper()
+    if len(cleaned) != 64:
+        raise ValueError(
+            f"Invalid recovery key length: expected 64 hex characters (256 bits of entropy), got {len(cleaned)}"
+        )
+    chunks = [cleaned[i:i+4] for i in range(0, 64, 4)]
+    return "-".join(chunks)
+
+
 def validate_recovery_key(key_input: str) -> str:
     """Validate and normalize a 256-bit recovery key.
     
     Ensures exactly 64 hexadecimal characters (256 bits of entropy).
     Allows hyphens and spaces for readability and returns canonical chunked format.
     """
-    cleaned = key_input.replace("-", "").replace(" ", "").strip().upper()
-    if len(cleaned) != 64:
-        raise ValueError(
-            f"Invalid recovery key length: expected 64 hex characters (256 bits of entropy), got {len(cleaned)}"
-        )
-    if not all(c in "0123456789ABCDEF" for c in cleaned):
-        raise ValueError("Invalid recovery key: contains non-hexadecimal characters")
-    chunks = [cleaned[i:i+4] for i in range(0, 64, 4)]
-    return "-".join(chunks)
+    return normalize_recovery_key(key_input)
 
 
 def run_cryptsetup_pipe(cmd: list, input_bytes: bytes) -> tuple[int, str, str]:

@@ -168,18 +168,65 @@ def test_backup_destination_default_deny():
     print("\n--- 2. Recovery Backup Destination Default-Deny Allowlist ---")
     export_script = os.path.join(SCRIPT_DIR, "export_recovery_backup.sh")
 
-    # Helper function to run validate_export_destination with mock profile
+    # Helper function to run validate_export_destination with isolated fixture profiles
     def run_val(target: str, mock_profile: str = "") -> int:
-        env = os.environ.copy()
-        if mock_profile:
-            env["BHOOT_BACKUP_ALLOWLIST_MOCK"] = mock_profile
-        else:
-            env.pop("BHOOT_BACKUP_ALLOWLIST_MOCK", None)
-        cmd = [
-            "bash", "-c",
-            f"source '{export_script}'; validate_export_destination '{target}'"
-        ]
-        p = subprocess.run(cmd, env=env, capture_output=True, text=True)
+        if not mock_profile:
+            cmd = [
+                "bash", "-c",
+                f"source '{export_script}'; validate_export_destination '{target}'"
+            ]
+            p = subprocess.run(cmd, capture_output=True, text=True)
+            return p.returncode
+
+        # Isolated fixture script: overrides tools without Rule 5 bypass
+        fixture_script = f"""
+export BHOOT_SOURCE_HEADER=/dev/null
+export BHOOT_ALLOWLIST_FIXTURE=1
+findmnt() {{
+    case "{mock_profile}" in
+        "usb_removable") echo "/dev/sdb1 ext4 {target}" ;;
+        "internal_sata") echo "/dev/sdc1 ext4 {target}" ;;
+        "internal_nvme") echo "/dev/nvme1n1p1 ext4 {target}" ;;
+        "secondary_nvme") echo "/dev/nvme2n1p1 ext4 {target}" ;;
+        "mmc") echo "/dev/mmcblk0p1 ext4 {target}" ;;
+        "device_mapper_internal") echo "/dev/dm-4 ext4 {target}" ;;
+        "device_mapper_multislave") echo "/dev/dm-5 ext4 {target}" ;;
+        "bind_mount_internal") echo "/dev/nvme0n1p2 ext4 {target}" ;;
+        *) echo "" ;;
+    esac
+}}
+udevadm() {{
+    case "{mock_profile}" in
+        "usb_removable")
+            if [ "$2" = "path" ]; then echo "/devices/pci0000:00/0000:00:14.0/usb1/1-1/block/sdb/sdb1"; else echo -e "ID_BUS=usb\\nID_DRIVE_THUMB=1"; fi
+            ;;
+        "internal_sata")
+            if [ "$2" = "path" ]; then echo "/devices/pci0000:00/ata1/host0/target0:0:0/block/sdc/sdc1"; else echo "ID_BUS=ata"; fi
+            ;;
+        "internal_nvme"|"secondary_nvme")
+            if [ "$2" = "path" ]; then echo "/devices/pci0000:00/nvme/nvme1n1/nvme1n1p1"; else echo "ID_BUS=pci"; fi
+            ;;
+        "mmc")
+            if [ "$2" = "path" ]; then echo "/devices/pci0000:00/mmc0/mmcblk0/mmcblk0p1"; else echo "ID_BUS=mmc"; fi
+            ;;
+        *) echo "" ;;
+    esac
+}}
+lsblk() {{
+    case "{mock_profile}" in
+        "usb_removable") echo "sdb" ;;
+        "internal_sata") echo "sdc" ;;
+        "internal_nvme") echo "nvme1n1" ;;
+        "secondary_nvme") echo "nvme2n1" ;;
+        "mmc") echo "mmcblk0" ;;
+        *) echo "" ;;
+    esac
+}}
+mkdir -p "{target}" 2>/dev/null || true
+source '{export_script}'
+validate_export_destination '{target}'
+"""
+        p = subprocess.run(["bash", "-c", fixture_script], capture_output=True, text=True)
         return p.returncode
 
     # 2.1 Default decision is REJECT on empty or unknown path

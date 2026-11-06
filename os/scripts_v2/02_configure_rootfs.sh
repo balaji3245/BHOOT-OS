@@ -432,8 +432,291 @@ chmod 0755 "$ROOTFS/usr/local/sbin/bhoot-firstboot-setup"
 # Compile and install bhoot-grub-pbkdf2 helper utility into rootfs
 echo "  Compiling and installing bhoot-grub-pbkdf2 helper..."
 mkdir -p "$ROOTFS/usr/local/bin"
-gcc -O2 -Wall -Wextra -Werror "$OS_DIR/tools/bhoot-grub-pbkdf2.c" -lcrypto -o "$ROOTFS/usr/local/bin/bhoot-grub-pbkdf2"
+gcc -std=gnu11 -O2 -Wall -Wextra -Werror "$OS_DIR/tools/bhoot-grub-pbkdf2.c" -lcrypto -o "$ROOTFS/usr/local/bin/bhoot-grub-pbkdf2"
 chmod 0755 "$ROOTFS/usr/local/bin/bhoot-grub-pbkdf2"
+
+# Install Authenticated Disaster Recovery Console (HIGH-01 Remediation)
+echo "  Installing authenticated disaster recovery console and emergency tools..."
+cat << 'EOF' > "$ROOTFS/usr/local/sbin/bhoot-recovery-console"
+#!/usr/bin/env bash
+# Project BHOOT — Authenticated Disaster Recovery Console
+# Offline-first security: Strictly authenticated maintenance shell.
+# Drops into root shell ONLY upon successful administrator PBKDF2 authentication.
+set -u
+
+umask 077
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export HISTFILE="/dev/null"
+
+cleanup_and_reboot() {
+    echo ""
+    echo " [SECURITY ALERT] Recovery interrupted. System rebooting..."
+    sync
+    systemctl reboot -f 2>/dev/null || reboot -f
+    exit 1
+}
+trap cleanup_and_reboot INT TERM
+
+RECOVERY_BANNER="========================================================================
+       PROJECT BHOOT — AUTHENTICATED DISASTER RECOVERY CONSOLE
+========================================================================
+ Target: Offline Storage Diagnostics & Cryptographic Header Recovery
+ Notice: Unauthenticated root shell access is strictly prohibited.
+========================================================================"
+
+echo "$RECOVERY_BANNER"
+
+# 1. Mount ESP (BHOOT_EFI) to retrieve enrolled administrator authentication hash
+EFI_DIR="/boot/efi"
+mkdir -p "$EFI_DIR" 2>/dev/null || true
+if ! mountpoint -q "$EFI_DIR"; then
+    mount -t vfat -o ro /dev/disk/by-label/BHOOT_EFI "$EFI_DIR" 2>/dev/null || \
+    mount -t vfat -o ro /dev/sda1 "$EFI_DIR" 2>/dev/null || \
+    mount -t vfat -o ro /dev/vda1 "$EFI_DIR" 2>/dev/null || true
+fi
+
+# 2. Mount Offline Recovery Partition (BHOOT_REC) if available
+REC_DIR="/recovery"
+mkdir -p "$REC_DIR" 2>/dev/null || true
+if ! mountpoint -q "$REC_DIR"; then
+    mount -t ext4 -o ro /dev/disk/by-label/BHOOT_REC "$REC_DIR" 2>/dev/null || \
+    mount -t ext4 -o ro /dev/disk/by-partuuid/B8007001-0004-4000-8000-000000000004 "$REC_DIR" 2>/dev/null || \
+    mount -t ext4 -o ro /dev/sda4 "$REC_DIR" 2>/dev/null || \
+    mount -t ext4 -o ro /dev/vda4 "$REC_DIR" 2>/dev/null || true
+fi
+
+# Ensure restore_header.sh is executable and in standard recovery path
+if [ -f "$REC_DIR/restore_header.sh" ]; then
+    chmod +x "$REC_DIR/restore_header.sh" 2>/dev/null || true
+    ln -sf "$REC_DIR/restore_header.sh" /usr/local/sbin/restore_header.sh 2>/dev/null || true
+    ln -sf "$REC_DIR/restore_header.sh" /root/restore_header.sh 2>/dev/null || true
+fi
+
+# Locate grub-auth.cfg
+GRUB_AUTH_CFG=""
+for candidate in "$EFI_DIR/EFI/BOOT/grub-auth.cfg" "$EFI_DIR/boot/grub/grub-auth.cfg" /boot/grub/grub-auth.cfg; do
+    if [ -s "$candidate" ]; then
+        GRUB_AUTH_CFG="$candidate"
+        break
+    fi
+done
+
+if [ -z "$GRUB_AUTH_CFG" ] || grep -q "Status: UNENROLLED" "$GRUB_AUTH_CFG" 2>/dev/null; then
+    echo " [FATAL ERROR] BHOOT administrator credentials have not been enrolled."
+    echo " Normal first-boot provisioning must be completed before recovery access."
+    echo " System will restart in 5 seconds..."
+    sleep 5
+    sync
+    systemctl reboot -f 2>/dev/null || reboot -f
+    exit 1
+fi
+
+# 3. Authenticate Operator interactively
+MAX_ATTEMPTS=3
+ATTEMPT=1
+AUTH_SUCCESS=0
+
+while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ]; do
+    echo ""
+    echo " Recovery Authentication Required (Attempt $ATTEMPT of $MAX_ATTEMPTS)"
+    read -s -p " Enter Administrator Recovery Password: " ENTERED_PASS
+    echo ""
+
+    if [ -z "$ENTERED_PASS" ]; then
+        echo " [!] Password cannot be empty."
+        ATTEMPT=$((ATTEMPT + 1))
+        continue
+    fi
+
+    # Verify password against enrolled PBKDF2 hash using compiled binary
+    if printf '%s\n' "$ENTERED_PASS" | /usr/local/bin/bhoot-grub-pbkdf2 --verify-file "$GRUB_AUTH_CFG" >/dev/null 2>&1; then
+        AUTH_SUCCESS=1
+        unset ENTERED_PASS
+        break
+    else
+        unset ENTERED_PASS
+        echo " [SECURITY ALERT] Authentication failure: invalid credentials."
+        ATTEMPT=$((ATTEMPT + 1))
+        sleep 2
+    fi
+done
+
+if [ "$AUTH_SUCCESS" -ne 1 ]; then
+    echo ""
+    echo " [CRITICAL ALERT] Maximum recovery authentication attempts exceeded."
+    echo " Rebooting system immediately..."
+    sync
+    systemctl reboot -f 2>/dev/null || reboot -f
+    exit 1
+fi
+
+echo ""
+echo " [OK] Authentication successful. Initializing root recovery environment..."
+echo "========================================================================"
+echo " Available Recovery Commands:"
+echo "   restore_header.sh          - Restore detached LUKS2 header to Partition 3"
+echo "   bhoot-unlock-recovery-key  - Interactive persistence unlock using recovery key"
+echo "   cryptsetup luksDump <dev>  - Inspect LUKS keyslots and header integrity"
+echo "   exit                       - Complete maintenance and reboot system"
+echo "========================================================================"
+
+export PS1="[BHOOT-RECOVERY]# "
+cd /root 2>/dev/null || cd /
+
+# Execute interactive root shell
+/bin/bash --norc --noprofile
+
+echo ""
+echo " Exiting recovery console. Syncing disks and rebooting..."
+sync
+systemctl reboot -f 2>/dev/null || reboot -f
+EOF
+chmod 0700 "$ROOTFS/usr/local/sbin/bhoot-recovery-console"
+
+# Install Emergency Recovery Key Unlock Helper (LOW-02 Remediation)
+cat << 'EOF' > "$ROOTFS/usr/local/sbin/bhoot-unlock-recovery-key"
+#!/usr/bin/env bash
+# Project BHOOT — Interactive Recovery Key Unlock Helper
+# Normalizes operator input (strips hyphens, spaces, handles lowercase)
+# to match enrolled 256-bit recovery key in Keyslot 1.
+set -euo pipefail
+
+TARGET_DEV="${1:-}"
+if [ -z "$TARGET_DEV" ]; then
+    for candidate in /dev/disk/by-partuuid/B8007001-0003-4000-8000-000000000003 /dev/disk/by-label/BHOOT_DATA /dev/vda3 /dev/sda3; do
+        if [ -b "$candidate" ]; then
+            TARGET_DEV="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -z "$TARGET_DEV" ] || [ ! -b "$TARGET_DEV" ]; then
+    echo "ERROR: Target LUKS block device not found!" >&2
+    exit 1
+fi
+
+MAPPER_NAME="${2:-bhoot_data_recovery}"
+
+echo "========================================================================"
+echo " BHOOT Emergency LUKS2 Recovery Unlock Helper"
+echo " Target Device: $TARGET_DEV -> /dev/mapper/$MAPPER_NAME"
+echo "========================================================================"
+read -s -p " Enter 256-bit recovery key (64 hex characters, hyphens optional): " RAW_INPUT
+echo ""
+
+# Normalize input: strip all whitespace and hyphens, convert to uppercase
+CLEAN_HEX=$(echo "$RAW_INPUT" | tr -d ' \t\r\n-' | tr '[:lower:]' '[:upper:]')
+unset RAW_INPUT
+
+if [ ${#CLEAN_HEX} -ne 64 ] || ! echo "$CLEAN_HEX" | grep -qE '^[0-9A-F]{64}$'; then
+    echo "ERROR: Invalid recovery key format. Expected 64 hexadecimal characters (256 bits)." >&2
+    unset CLEAN_HEX
+    exit 1
+fi
+
+# Format into canonical 16 chunks of 4 characters: XXXX-XXXX-...-XXXX
+CHUNKED_KEY=$(echo "$CLEAN_HEX" | sed -E 's/(.{4})/\1-/g; s/-$//')
+unset CLEAN_HEX
+
+echo " Attempting LUKS2 unlock with normalized recovery key..."
+if printf '%s' "$CHUNKED_KEY" | cryptsetup open --type luks2 --key-slot 1 "$TARGET_DEV" "$MAPPER_NAME" --key-file -; then
+    unset CHUNKED_KEY
+    echo " [OK] Volume unlocked successfully: /dev/mapper/$MAPPER_NAME"
+else
+    unset CHUNKED_KEY
+    echo " [ERROR] Recovery key failed to unlock $TARGET_DEV." >&2
+    exit 1
+fi
+EOF
+chmod 0755 "$ROOTFS/usr/local/sbin/bhoot-unlock-recovery-key"
+
+# Install fallback restore_header.sh in rootfs
+cat << 'EOF' > "$ROOTFS/usr/local/sbin/restore_header.sh"
+#!/usr/bin/env bash
+# Project BHOOT — Detached LUKS2 Header Restoration Utility
+# Restores detached header backup to Partition 3 (BHOOT_DATA)
+set -euo pipefail
+
+TARGET_DEV="${1:-}"
+if [ -z "$TARGET_DEV" ]; then
+    for candidate in /dev/disk/by-partuuid/B8007001-0003-4000-8000-000000000003 /dev/disk/by-label/BHOOT_DATA /dev/vda3 /dev/sda3; do
+        if [ -b "$candidate" ]; then
+            TARGET_DEV="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -z "$TARGET_DEV" ] || [ ! -b "$TARGET_DEV" ]; then
+    echo "ERROR: Target LUKS block device not found!" >&2
+    echo "Usage: restore_header.sh [target_device] [backup_file]" >&2
+    exit 1
+fi
+
+BACKUP_FILE="${2:-}"
+if [ -z "$BACKUP_FILE" ]; then
+    for candidate in /recovery/bhoot_luks_header.backup /boot/efi/bhoot_luks_header.backup /root/bhoot_luks_header.backup /etc/bhoot/bhoot_luks_header.backup; do
+        if [ -f "$candidate" ]; then
+            BACKUP_FILE="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -z "$BACKUP_FILE" ] || [ ! -f "$BACKUP_FILE" ]; then
+    echo "ERROR: LUKS2 header backup file not found!" >&2
+    echo "Mount recovery volume (BHOOT_REC) to /recovery or specify backup file path." >&2
+    exit 1
+fi
+
+echo "========================================================================"
+echo " BHOOT LUKS2 Header Restoration Engine"
+echo " Target Block Device: $TARGET_DEV"
+echo " Header Backup File:  $BACKUP_FILE"
+echo "========================================================================"
+
+echo "Restoring detached LUKS2 header to $TARGET_DEV..."
+cryptsetup luksHeaderRestore "$TARGET_DEV" --header-backup-file "$BACKUP_FILE" --batch-mode
+
+echo "Verifying restored header integrity..."
+cryptsetup luksDump "$TARGET_DEV" >/dev/null
+
+echo "========================================================================"
+echo " [OK] LUKS2 header restored successfully."
+echo " Volume can now be unlocked with master password or recovery key."
+echo "========================================================================"
+EOF
+chmod 0755 "$ROOTFS/usr/local/sbin/restore_header.sh"
+
+# Install Systemd drop-in overrides for rescue.service and emergency.service
+mkdir -p "$ROOTFS/etc/systemd/system/rescue.service.d"
+cat << 'EOF' > "$ROOTFS/etc/systemd/system/rescue.service.d/override.conf"
+[Unit]
+Description=BHOOT Authenticated Disaster Recovery Console
+
+[Service]
+ExecStart=
+ExecStart=-/usr/local/sbin/bhoot-recovery-console
+StandardInput=tty-force
+StandardOutput=inherit
+StandardError=inherit
+EOF
+chmod 0644 "$ROOTFS/etc/systemd/system/rescue.service.d/override.conf"
+
+mkdir -p "$ROOTFS/etc/systemd/system/emergency.service.d"
+cat << 'EOF' > "$ROOTFS/etc/systemd/system/emergency.service.d/override.conf"
+[Unit]
+Description=BHOOT Authenticated Disaster Recovery Console
+
+[Service]
+ExecStart=
+ExecStart=-/usr/local/sbin/bhoot-recovery-console
+StandardInput=tty-force
+StandardOutput=inherit
+StandardError=inherit
+EOF
+chmod 0644 "$ROOTFS/etc/systemd/system/emergency.service.d/override.conf"
 
 # Install Systemd units for early security init and first-boot provisioning
 cat << 'EOF' > "$ROOTFS/etc/systemd/system/bhoot-security-init.service"

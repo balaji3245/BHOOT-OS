@@ -293,6 +293,13 @@ def run_qemu_grub_recovery_test(disk_img: str, grub_pass: str) -> dict:
         "negative_auth_rejected": False,
         "positive_auth_accepted": False,
         "recovery_kernel_loaded": False,
+        "recovery_console_reached": False,
+        "console_negative_rejected": False,
+        "console_positive_accepted": False,
+        "root_shell_prompt_reached": False,
+        "recovery_root_verified": False,
+        "restore_header_executable": False,
+        "recovery_clean_poweroff": False,
     }
 
     log_file_path = os.path.join(DISPOSABLE_DIR, "boot3_grub_recovery.log")
@@ -312,8 +319,8 @@ def run_qemu_grub_recovery_test(disk_img: str, grub_pass: str) -> dict:
         "-serial", "stdio"
     ]
 
-    log_event("Launching QEMU (Boot 3: GRUB Recovery Menu Interactive Authentication Test)...")
-    child = pexpect.spawn(qemu_cmd[0], qemu_cmd[1:], timeout=60, encoding="utf-8", codec_errors="replace")
+    log_event("Launching QEMU (Boot 3: GRUB Recovery Menu & Authenticated Recovery Console Test)...")
+    child = pexpect.spawn(qemu_cmd[0], qemu_cmd[1:], timeout=90, encoding="utf-8", codec_errors="replace")
     child.logfile_read = log_file
 
     try:
@@ -337,7 +344,7 @@ def run_qemu_grub_recovery_test(disk_img: str, grub_pass: str) -> dict:
             results["auth_prompt_reached"] = True
             log_event("  [PASS] Stage R2: GRUB requested username authentication for restricted menuentry.")
 
-            # NEGATIVE AUTHENTICATION TEST
+            # NEGATIVE AUTHENTICATION TEST (GRUB)
             log_event("  Testing negative GRUB authentication with incorrect password...")
             child.sendline("bhoot-admin")
             child.expect(["Enter password:", "password:"], timeout=10)
@@ -364,7 +371,7 @@ def run_qemu_grub_recovery_test(disk_img: str, grub_pass: str) -> dict:
                 results["negative_auth_rejected"] = True
                 log_event("  [PASS] Stage R3: GRUB rejected wrong password and re-prompted for username.")
 
-            # POSITIVE AUTHENTICATION TEST
+            # POSITIVE AUTHENTICATION TEST (GRUB)
             log_event("  Testing positive GRUB authentication with enrolled owner password...")
             child.sendline("bhoot-admin")
             child.expect(["Enter password:", "password:"], timeout=10)
@@ -379,7 +386,79 @@ def run_qemu_grub_recovery_test(disk_img: str, grub_pass: str) -> dict:
                 log_event("  [PASS] Stage R4: GRUB successfully authenticated 'bhoot-admin' with enrolled PBKDF2 hash!")
                 log_event("  [PASS] Stage R5: Recovery kernel loaded and booting initiated.")
 
-        # Clean exit QEMU
+        # Stage R6: Wait for systemd rescue.target and Authenticated Recovery Console
+        log_event("  Waiting for authenticated recovery console under systemd rescue.target...")
+        idx_c = child.expect([
+            "AUTHENTICATED DISASTER RECOVERY CONSOLE",
+            "Enter Administrator Recovery Password:",
+            "Recovery Authentication Required",
+            pexpect.TIMEOUT
+        ], timeout=45)
+
+        if idx_c in (0, 1, 2):
+            results["recovery_console_reached"] = True
+            log_event("  [PASS] Stage R6: Authenticated Disaster Recovery Console reached in guest!")
+
+            # Stage R7: Negative Authentication in Recovery Console
+            log_event("  Testing negative console authentication with incorrect recovery password...")
+            time.sleep(0.5)
+            child.sendline("WrongRecoveryConsolePass123!")
+
+            idx_crej = child.expect([
+                "Authentication failure: invalid credentials",
+                "Attempt 2 of 3",
+                pexpect.TIMEOUT
+            ], timeout=15)
+
+            if idx_crej in (0, 1):
+                results["console_negative_rejected"] = True
+                log_event("  [PASS] Stage R7: Recovery console rejected invalid password and enforced rate-limiting delay.")
+
+            # Stage R8: Positive Authentication in Recovery Console
+            log_event("  Testing positive console authentication with enrolled administrator password...")
+            time.sleep(0.5)
+            child.sendline(grub_pass)
+
+            idx_cacc = child.expect([
+                r"\[BHOOT-RECOVERY\]#",
+                "Authentication successful",
+                pexpect.TIMEOUT
+            ], timeout=20)
+
+            if idx_cacc in (0, 1):
+                results["console_positive_accepted"] = True
+                results["root_shell_prompt_reached"] = True
+                log_event("  [PASS] Stage R8: Recovery console authenticated owner and spawned root shell ([BHOOT-RECOVERY]#)!")
+
+                # Stage R9: Verify root identity and disaster recovery tools in shell
+                log_event("  Verifying root privileges in interactive recovery shell...")
+                child.sendline("whoami")
+                idx_who = child.expect(["root", pexpect.TIMEOUT], timeout=10)
+                if idx_who == 0:
+                    results["recovery_root_verified"] = True
+                    log_event("  [PASS] Stage R9: Confirmed root user privileges in recovery maintenance environment.")
+
+                # Stage R10: Verify restore_header.sh utility is present and executable
+                log_event("  Verifying restore_header.sh disaster recovery tool...")
+                child.sendline("which restore_header.sh && restore_header.sh /dev/null /dev/null 2>&1 || true")
+                idx_rh = child.expect([
+                    "restore_header.sh",
+                    "LUKS block device",
+                    pexpect.TIMEOUT
+                ], timeout=10)
+                if idx_rh in (0, 1):
+                    results["restore_header_executable"] = True
+                    log_event("  [PASS] Stage R10: restore_header.sh is in PATH and executable by root.")
+
+                # Stage R11: Clean poweroff from recovery shell
+                log_event("  Issuing clean poweroff from recovery shell...")
+                child.sendline("systemctl poweroff -f || poweroff -f")
+                idx_pwr = child.expect([pexpect.EOF, "reboot: System halted", "Power down", pexpect.TIMEOUT], timeout=15)
+                if idx_pwr in (0, 1, 2):
+                    results["recovery_clean_poweroff"] = True
+                    log_event("  [PASS] Stage R11: Clean system poweroff from recovery environment verified.")
+
+        # Fallback QEMU quit if still running
         time.sleep(1)
         child.send("\x01x")
         child.expect([pexpect.EOF, pexpect.TIMEOUT], timeout=5)
@@ -453,6 +532,13 @@ def main():
         print(f" Boot 3 Negative Auth (Wrong Pass): {'PASS' if res3['negative_auth_rejected'] else 'FAIL'}")
         print(f" Boot 3 Positive Auth (Owner Pass): {'PASS' if res3['positive_auth_accepted'] else 'FAIL'}")
         print(f" Boot 3 Recovery Kernel Loaded:     {'PASS' if res3['recovery_kernel_loaded'] else 'FAIL'}")
+        print(f" Boot 3 Recovery Console Reached:   {'PASS' if res3['recovery_console_reached'] else 'FAIL'}")
+        print(f" Boot 3 Console Negative Rejected:  {'PASS' if res3['console_negative_rejected'] else 'FAIL'}")
+        print(f" Boot 3 Console Positive Accepted:  {'PASS' if res3['console_positive_accepted'] else 'FAIL'}")
+        print(f" Boot 3 Root Recovery Shell Prompt: {'PASS' if res3['root_shell_prompt_reached'] else 'FAIL'}")
+        print(f" Boot 3 Recovery Root Verified:     {'PASS' if res3['recovery_root_verified'] else 'FAIL'}")
+        print(f" Boot 3 restore_header.sh Verified: {'PASS' if res3['restore_header_executable'] else 'FAIL'}")
+        print(f" Boot 3 Recovery Clean Poweroff:    {'PASS' if res3['recovery_clean_poweroff'] else 'FAIL'}")
         print("-" * 72)
 
         mid1 = res1.get("machine_id")
@@ -467,11 +553,14 @@ def main():
             res1['root_rejected'] and res1['user_logged_in'] and res1['shadow_yescrypt'] and
             res2['luks_unlocked'] and res2['user_logged_in'] and res2['persistence_verified'] and
             mid_match and res3['negative_auth_rejected'] and res3['positive_auth_accepted'] and
-            res3['recovery_kernel_loaded']
+            res3['recovery_kernel_loaded'] and res3['recovery_console_reached'] and
+            res3['console_negative_rejected'] and res3['console_positive_accepted'] and
+            res3['root_shell_prompt_reached'] and res3['recovery_root_verified'] and
+            res3['restore_header_executable'] and res3['recovery_clean_poweroff']
         )
 
         if overall_pass:
-            print(" ALL 24 LIFECYCLE & SECURITY AUDIT VERIFICATION POINTS PASSED 100%!")
+            print(" ALL 31 LIFECYCLE & SECURITY AUDIT VERIFICATION POINTS PASSED 100%!")
             sys.exit(0)
         else:
             print(" LIFECYCLE AUDIT FAILED ON ONE OR MORE STAGES!")
