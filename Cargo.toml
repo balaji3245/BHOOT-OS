@@ -6,6 +6,7 @@ members = [
     "crates/bhoot-audit",
     "crates/bhoot-vault",
     "crates/bhoot-backup",
+    "crates/bhoot-desktop",
 ]
 resolver = "2"
 

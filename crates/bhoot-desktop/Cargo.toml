@@ -1,0 +1,25 @@
+[package]
+name = "bhoot-desktop"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bhoot-core = { workspace = true }
+bhoot-crypto = { workspace = true }
+bhoot-db = { workspace = true }
+bhoot-audit = { workspace = true }
+bhoot-vault = { workspace = true }
+bhoot-backup = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tiny_http = "0.12"
+
+[dev-dependencies]
+tempfile = { workspace = true }
