@@ -52,18 +52,87 @@ if [ -z "$DEST_DIR" ]; then
     exit 1
 fi
 
-# Normalize path
-DEST_DIR="$(readlink -f "$DEST_DIR" 2>/dev/null || echo "$DEST_DIR")"
+validate_export_destination() {
+    local target="$1"
 
-# Prohibit writing directly to block devices or target USB device nodes
-if echo "$DEST_DIR" | grep -E "^/dev/sda" >/dev/null 2>&1; then
-    echo "  CRITICAL SAFETY VIOLATION: Export destination cannot be /dev/sda!" >&2
-    echo "  The backup must reside on a physically separate medium." >&2
-    exit 1
-fi
+    # Reject if target is directly a block or character device node
+    if [ -b "$target" ] || [ -c "$target" ]; then
+        echo "  [CRITICAL ERROR] Destination cannot be a raw device node ($target)!" >&2
+        echo "  A mounted filesystem directory path is required." >&2
+        return 1
+    fi
 
-if echo "$DEST_DIR" | grep -E "^/dev/nvme|^/dev/mapper" >/dev/null 2>&1; then
-    echo "  CRITICAL SAFETY VIOLATION: Export destination cannot be internal disk /dev/nvme*!" >&2
+    # Check if target string matches protected physical devices
+    if echo "$target" | grep -qE "^/dev/sda|^/dev/nvme"; then
+        echo "  [CRITICAL ERROR] Destination matches protected device pattern: $target" >&2
+        return 1
+    fi
+
+    # Resolve canonical path to existing ancestor directory
+    local probe_path="$target"
+    while [ ! -e "$probe_path" ] && [ "$probe_path" != "/" ] && [ "$probe_path" != "." ]; do
+        probe_path="$(dirname "$probe_path")"
+    done
+
+    local canonical_target
+    canonical_target="$(readlink -f "$probe_path" 2>/dev/null || echo "$probe_path")"
+
+    if [ ! -d "$canonical_target" ]; then
+        echo "  [CRITICAL ERROR] Unable to resolve canonical directory for: $target" >&2
+        return 1
+    fi
+
+    # Resolve mount metadata using findmnt
+    local mnt_info
+    mnt_info="$(findmnt -n -o SOURCE,FSTYPE,TARGET -T "$canonical_target" 2>/dev/null || true)"
+
+    if [ -z "$mnt_info" ]; then
+        echo "  [CRITICAL ERROR] Failed to determine mount information for: $canonical_target" >&2
+        return 1
+    fi
+
+    local mnt_src
+    mnt_src="$(echo "$mnt_info" | awk '{print $1}')"
+
+    # Reject if mount source matches protected devices
+    if echo "$mnt_src" | grep -qE "^/dev/sda|^/dev/nvme0n1"; then
+        echo "  [CRITICAL SAFETY VIOLATION] Destination is mounted on protected device: $mnt_src" >&2
+        return 1
+    fi
+
+    # Resolve parent disk using lsblk if block device
+    if [ -b "$mnt_src" ] || [ -b "/dev/$mnt_src" ]; then
+        local real_dev
+        real_dev="$(readlink -f "$mnt_src" 2>/dev/null || echo "$mnt_src")"
+        if echo "$real_dev" | grep -qE "^/dev/sda|^/dev/nvme0n1"; then
+            echo "  [CRITICAL SAFETY VIOLATION] Destination backing device is protected: $real_dev" >&2
+            return 1
+        fi
+
+        local parent_disk
+        parent_disk="$(lsblk -no PKNAME "$real_dev" 2>/dev/null || true)"
+        if [ -n "$parent_disk" ] && echo "$parent_disk" | grep -qE "^sda|^nvme0n1"; then
+            echo "  [CRITICAL SAFETY VIOLATION] Destination parent disk is protected: $parent_disk" >&2
+            return 1
+        fi
+    fi
+
+    # In automated test mode with virtual mock protected devices
+    if [ -n "${BHOOT_PROTECTED_DEVICES:-}" ]; then
+        for prot in $BHOOT_PROTECTED_DEVICES; do
+            if [ "$mnt_src" = "$prot" ] || echo "$mnt_src" | grep -qE "^${prot}"; then
+                echo "  [CRITICAL SAFETY VIOLATION] Destination matches protected device: $prot" >&2
+                return 1
+            fi
+        done
+    fi
+
+    return 0
+}
+
+# Run validation BEFORE creating or modifying any file
+if ! validate_export_destination "$DEST_DIR"; then
+    echo "  Export aborted due to destination device safety violation." >&2
     exit 1
 fi
 

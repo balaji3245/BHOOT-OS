@@ -54,6 +54,11 @@ yarn-error.log*
 core
 *.dump
 
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
 # OS Images and Build Artifacts (Phase 2)
 /os/build/
 /os/build_real/

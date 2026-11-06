@@ -30,11 +30,32 @@ SECTOR_SIZE = 4096
 
 
 def generate_recovery_key() -> str:
-    """Generate 256-bit cryptographically secure independent recovery key."""
-    # 32 bytes = 256 bits of entropy
-    token = secrets.token_hex(16).upper()
-    # Format into 8 chunks of 4 characters: XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX
-    chunks = [token[i:i+4] for i in range(0, 32, 4)]
+    """Generate 256-bit cryptographically secure independent recovery key.
+    
+    Generates 32 cryptographically secure random bytes (256 bits of entropy).
+    Formatted as 16 chunks of 4 uppercase hex characters:
+    XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX
+    Total: 64 hexadecimal characters (79 characters including separators).
+    """
+    token = secrets.token_bytes(32).hex().upper()
+    chunks = [token[i:i+4] for i in range(0, 64, 4)]
+    return "-".join(chunks)
+
+
+def validate_recovery_key(key_input: str) -> str:
+    """Validate and normalize a 256-bit recovery key.
+    
+    Ensures exactly 64 hexadecimal characters (256 bits of entropy).
+    Allows hyphens and spaces for readability and returns canonical chunked format.
+    """
+    cleaned = key_input.replace("-", "").replace(" ", "").strip().upper()
+    if len(cleaned) != 64:
+        raise ValueError(
+            f"Invalid recovery key length: expected 64 hex characters (256 bits of entropy), got {len(cleaned)}"
+        )
+    if not all(c in "0123456789ABCDEF" for c in cleaned):
+        raise ValueError("Invalid recovery key: contains non-hexadecimal characters")
+    chunks = [cleaned[i:i+4] for i in range(0, 64, 4)]
     return "-".join(chunks)
 
 
@@ -169,7 +190,7 @@ def setup_ext4_filesystem(container_path: str, master_passphrase: str):
         # 5. live-boot persistence structure
         target_dir = os.path.join(mnt_pt, "var", "bhoot", "rw")
         os.makedirs(target_dir, exist_ok=True)
-        os.chmod(os.path.join(mnt_pt, "var", "bhoot"), 0o750)
+        os.chmod(os.path.join(mnt_pt, "var", "bhoot"), 0o755)
 
         with open(os.path.join(mnt_pt, "persistence.conf"), "w") as f:
             f.write("/var/bhoot\n")
@@ -244,7 +265,9 @@ def main():
             break
 
     if args.recovery_fd is not None:
-        recovery_key = os.fdopen(args.recovery_fd).readline().strip()
+        raw_key = os.fdopen(args.recovery_fd).readline().strip()
+        recovery_key = validate_recovery_key(raw_key)
+        del raw_key
     else:
         recovery_key = generate_recovery_key()
 

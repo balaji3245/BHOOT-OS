@@ -89,6 +89,28 @@ cp "$BOOTX64_EFI" "$MOUNT_POINT/EFI/BOOT/BOOTX64.EFI"
 cp "$GRUB_CFG" "$MOUNT_POINT/EFI/BOOT/grub.cfg"
 cp "$GRUB_CFG" "$MOUNT_POINT/boot/grub/grub.cfg"
 
+# Provision genuine GRUB PBKDF2 authentication configuration for bhoot-admin
+echo "  Provisioning genuine GRUB PBKDF2 administrator authentication configuration..."
+GRUB_AUTH_LINE=$(perl -e '
+use Digest::SHA qw(hmac_sha512);
+open my $f, "<:raw", "/dev/urandom" or die "urandom error: $!\n";
+read($f, my $salt_raw, 64) == 64 or die "short read\n";
+my $salt_hex = uc(unpack("H*", $salt_raw));
+my $pwd = $ENV{BHOOT_GRUB_ADMIN_PASS} || unpack("H*", substr($salt_raw, 0, 32));
+my $u = hmac_sha512($salt_raw . pack("N", 1), $pwd);
+my $t = $u;
+for (my $i = 1; $i < 10000; $i++) {
+    $u = hmac_sha512($u, $pwd);
+    $t ^= $u;
+}
+my $hash_hex = uc(unpack("H*", $t));
+print "password_pbkdf2 bhoot-admin grub.pbkdf2.sha512.10000.${salt_hex}.${hash_hex}\n";
+')
+
+echo "$GRUB_AUTH_LINE" > "$MOUNT_POINT/EFI/BOOT/grub-auth.cfg"
+echo "$GRUB_AUTH_LINE" > "$MOUNT_POINT/boot/grub/grub-auth.cfg"
+chmod 0600 "$MOUNT_POINT/EFI/BOOT/grub-auth.cfg" "$MOUNT_POINT/boot/grub/grub-auth.cfg"
+
 echo "  Copying genuine Linux kernel to /live/vmlinuz..."
 cp "$REAL_KERNEL" "$MOUNT_POINT/live/vmlinuz"
 

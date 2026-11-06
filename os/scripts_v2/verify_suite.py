@@ -331,7 +331,7 @@ artifacts_meta = [
 
 manifest_data = {
     "project": "BHOOT",
-    "phase": "2A.4",
+    "phase": "2A.8",
     "target_platform": "Dedicated Bootable USB (UEFI x86_64)",
     "base_distribution": "Debian 12 Bookworm amd64",
     "kernel": "Linux 6.1.0-50-amd64",

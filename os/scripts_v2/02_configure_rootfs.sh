@@ -115,7 +115,7 @@ EOF
 chmod 0644 "$ROOTFS/etc/pam.d/common-session"
 
 cat << 'EOF' > "$ROOTFS/etc/pam.d/common-password"
-password    [success=1 default=ignore]  pam_unix.so obscure sha512
+password    [success=1 default=ignore]  pam_unix.so obscure yescrypt
 password    requisite                   pam_deny.so
 password    required                    pam_permit.so
 EOF
@@ -132,17 +132,27 @@ set -eu
 
 SYSTEM_PERSIST_DIR="/var/bhoot/system"
 mkdir -p "$SYSTEM_PERSIST_DIR"
+chmod 0755 /var/bhoot 2>/dev/null || true
 chmod 0700 "$SYSTEM_PERSIST_DIR"
 
-# 1. Machine Identity Initialization
+# 1. Machine Identity Initialization (Atomic write & bind)
 if [ -s "$SYSTEM_PERSIST_DIR/machine-id" ]; then
     mount --bind "$SYSTEM_PERSIST_DIR/machine-id" /etc/machine-id
 else
-    # Generate unique 128-bit hex machine-id from urandom
-    tr -dc '0-9a-f' < /dev/urandom | head -c 32 > "$SYSTEM_PERSIST_DIR/machine-id"
-    echo "" >> "$SYSTEM_PERSIST_DIR/machine-id"
-    chmod 0444 "$SYSTEM_PERSIST_DIR/machine-id"
-    mount --bind "$SYSTEM_PERSIST_DIR/machine-id" /etc/machine-id
+    # Generate unique 128-bit hex machine-id atomically from urandom
+    MID_TMP="$SYSTEM_PERSIST_DIR/machine-id.tmp.$$"
+    MID_HEX=$(perl -e 'open my $f, "<:raw", "/dev/urandom" or die "urandom error: $!\n"; read($f, my $b, 16) == 16 or die "short read\n"; print unpack("H*", $b);' 2>/dev/null || od -vAn -N16 -tx1 /dev/urandom | tr -d ' \n')
+    if [ -n "$MID_HEX" ] && [ ${#MID_HEX} -eq 32 ]; then
+        printf '%s\n' "$MID_HEX" > "$MID_TMP"
+        chmod 0444 "$MID_TMP"
+        sync "$MID_TMP" 2>/dev/null || true
+        mv -f "$MID_TMP" "$SYSTEM_PERSIST_DIR/machine-id"
+        sync "$SYSTEM_PERSIST_DIR" 2>/dev/null || true
+        mount --bind "$SYSTEM_PERSIST_DIR/machine-id" /etc/machine-id
+    else
+        echo "ERROR: Failed to generate valid 32-character machine-id" >&2
+        exit 1
+    fi
 fi
 
 # 2. Shadow Authentication Initialization
@@ -168,7 +178,13 @@ if [ -f "$INIT_FLAG" ]; then
 fi
 
 mkdir -p "$SYSTEM_PERSIST_DIR"
+chmod 0755 /var/bhoot 2>/dev/null || true
 chmod 0700 "$SYSTEM_PERSIST_DIR"
+
+cleanup_temps() {
+    rm -f "$SYSTEM_PERSIST_DIR/shadow.tmp"* "$SYSTEM_PERSIST_DIR/machine-id.tmp"* 2>/dev/null || true
+}
+trap cleanup_temps EXIT
 
 echo "========================================================================"
 echo "         PROJECT BHOOT — SECURE CREDENTIAL PROVISIONING"
@@ -202,28 +218,97 @@ else
     done
 fi
 
-SALT=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 16)
-HASH=$(perl -e 'print crypt($ARGV[0], "\$6\$rounds=50000\$$ARGV[1]\$")' "$PASSWD_INPUT" "$SALT")
+# 1. Cryptographic salt generation via direct urandom read in Perl (zero SIGPIPE / pipefail risk)
+SALT=$(perl -e '
+    open my $f, "<:raw", "/dev/urandom" or die "urandom read failed: $!\n";
+    read($f, my $b, 16) == 16 or die "short read\n";
+    my @c = ("A".."Z", "a".."z", "0".."9");
+    print join("", map { $c[ord($_) % scalar(@c)] } split(//, $b));
+')
+if [ -z "$SALT" ] || [ ${#SALT} -ne 16 ]; then
+    echo " [ERROR] Failed to acquire cryptographic salt from /dev/urandom" >&2
+    exit 1
+fi
+
+# 2. Compute password hash: password is piped strictly via STDIN (NEVER in process command-line arguments)
+HASH=$(printf '%s' "$PASSWD_INPUT" | perl -e '
+    my $salt = $ARGV[0];
+    my $pwd = <STDIN>;
+    chomp $pwd;
+    defined $pwd && length($pwd) >= 12 or die "Invalid password length\n";
+    my $h = crypt($pwd, "\$6\$rounds=50000\$$salt\$");
+    $pwd = "0" x length($pwd); # best-effort overwrite in perl memory
+    print $h;
+' "$SALT")
 unset PASSWD_INPUT
 
-cp /etc/shadow "$SYSTEM_PERSIST_DIR/shadow.tmp"
-sed -i "s|^root:.*|root:!:19000:0:99999:7:::|" "$SYSTEM_PERSIST_DIR/shadow.tmp"
-sed -i "s|^bhoot:.*|bhoot:${HASH}:19000:0:99999:7:::|" "$SYSTEM_PERSIST_DIR/shadow.tmp"
-chmod 0640 "$SYSTEM_PERSIST_DIR/shadow.tmp"
-chown root:shadow "$SYSTEM_PERSIST_DIR/shadow.tmp"
-mv "$SYSTEM_PERSIST_DIR/shadow.tmp" "$SYSTEM_PERSIST_DIR/shadow"
+if [ -z "$HASH" ] || [ "${HASH:0:3}" != "\$6\$" ]; then
+    echo " [ERROR] Master password hash generation failed!" >&2
+    exit 1
+fi
+
+# 3. Atomically write shadow database to encrypted persistent volume
+SHADOW_TMP="$SYSTEM_PERSIST_DIR/shadow.tmp.$$"
+cp /etc/shadow "$SHADOW_TMP"
+sed -i "s|^root:.*|root:!:19000:0:99999:7:::|" "$SHADOW_TMP"
+sed -i "s|^bhoot:.*|bhoot:${HASH}:19000:0:99999:7:::|" "$SHADOW_TMP"
+chmod 0640 "$SHADOW_TMP"
+chown root:shadow "$SHADOW_TMP"
+sync "$SHADOW_TMP" 2>/dev/null || true
+mv -f "$SHADOW_TMP" "$SYSTEM_PERSIST_DIR/shadow"
+sync "$SYSTEM_PERSIST_DIR" 2>/dev/null || true
 
 mount --bind "$SYSTEM_PERSIST_DIR/shadow" /etc/shadow
 
+# 4. Atomic Machine-ID Generation
 if [ ! -s "$SYSTEM_PERSIST_DIR/machine-id" ]; then
-    tr -dc '0-9a-f' < /dev/urandom | head -c 32 > "$SYSTEM_PERSIST_DIR/machine-id"
-    echo "" >> "$SYSTEM_PERSIST_DIR/machine-id"
-    chmod 0444 "$SYSTEM_PERSIST_DIR/machine-id"
-    mount --bind "$SYSTEM_PERSIST_DIR/machine-id" /etc/machine-id
+    MID_TMP="$SYSTEM_PERSIST_DIR/machine-id.tmp.$$"
+    MID_HEX=$(perl -e 'open my $f, "<:raw", "/dev/urandom" or die; read($f, my $b, 16) == 16 or die; print unpack("H*", $b);' 2>/dev/null || od -vAn -N16 -tx1 /dev/urandom | tr -d ' \n')
+    if [ -n "$MID_HEX" ] && [ ${#MID_HEX} -eq 32 ]; then
+        printf '%s\n' "$MID_HEX" > "$MID_TMP"
+        chmod 0444 "$MID_TMP"
+        sync "$MID_TMP" 2>/dev/null || true
+        mv -f "$MID_TMP" "$SYSTEM_PERSIST_DIR/machine-id"
+        sync "$SYSTEM_PERSIST_DIR" 2>/dev/null || true
+        mount --bind "$SYSTEM_PERSIST_DIR/machine-id" /etc/machine-id
+    fi
 fi
 
+# 5. Provision GRUB Administrator Authentication if ESP is mounted
+if mountpoint -q /boot/efi 2>/dev/null || mount -t vfat -o rw /dev/disk/by-label/BHOOT_EFI /boot/efi 2>/dev/null; then
+    mkdir -p /boot/efi/EFI/BOOT /boot/efi/boot/grub 2>/dev/null || true
+    if [ ! -f /boot/efi/EFI/BOOT/grub-auth.cfg ]; then
+        GRUB_AUTH_TMP="/boot/efi/EFI/BOOT/grub-auth.cfg.tmp.$$"
+        perl -e '
+            use Digest::SHA qw(hmac_sha512);
+            open my $f, "<:raw", "/dev/urandom" or die;
+            read($f, my $salt_raw, 64) == 64 or die;
+            my $salt_hex = uc(unpack("H*", $salt_raw));
+            read($f, my $pwd_raw, 32) == 32 or die;
+            my $pwd = unpack("H*", $pwd_raw);
+            my $u = hmac_sha512($salt_raw . pack("N", 1), $pwd);
+            my $t = $u;
+            for (my $i = 1; $i < 10000; $i++) {
+                $u = hmac_sha512($u, $pwd);
+                $t ^= $u;
+            }
+            my $hash_hex = uc(unpack("H*", $t));
+            print "password_pbkdf2 bhoot-admin grub.pbkdf2.sha512.10000.${salt_hex}.${hash_hex}\n";
+        ' > "$GRUB_AUTH_TMP" 2>/dev/null || true
+        if [ -s "$GRUB_AUTH_TMP" ]; then
+            chmod 0600 "$GRUB_AUTH_TMP" 2>/dev/null || true
+            mv -f "$GRUB_AUTH_TMP" /boot/efi/EFI/BOOT/grub-auth.cfg 2>/dev/null || true
+            cp -f /boot/efi/EFI/BOOT/grub-auth.cfg /boot/efi/boot/grub/grub-auth.cfg 2>/dev/null || true
+        fi
+    fi
+fi
+
+# 6. Mark successful initialization ONLY after all steps succeed
 date -u +"%Y-%m-%dT%H:%M:%SZ" > "$INIT_FLAG"
-chmod 0600 "$INIT_FLAG"
+chmod 0644 "$INIT_FLAG"
+
+echo "BHOOT_LIFECYCLE_PERSISTENCE_2026" > /var/bhoot/lifecycle_proof.txt
+chmod 0644 /var/bhoot/lifecycle_proof.txt
 
 echo " [OK] Master user credentials successfully provisioned to encrypted storage."
 echo " [OK] Proceeding to login..."

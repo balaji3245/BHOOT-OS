@@ -41,6 +41,9 @@ IGNORE_EXTENSIONS = {
 # Documentation and ignore files are allowed to reference patterns
 ALLOWLIST_FILES = {
     "PHASE_2A_5_SECURITY_READINESS_AUDIT.md",
+    "PHASE_2A_6_SECURITY_REMEDIATION_REPORT.md",
+    "PHASE_2A_7_INDEPENDENT_VERIFICATION_AUDIT.md",
+    "PHASE_2A_8_REMEDIATION_REPORT.md",
     "transcript.jsonl",
     "transcript_full.jsonl",
     ".gitignore",
