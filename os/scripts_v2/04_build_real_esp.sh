@@ -90,25 +90,39 @@ cp "$GRUB_CFG" "$MOUNT_POINT/EFI/BOOT/grub.cfg"
 cp "$GRUB_CFG" "$MOUNT_POINT/boot/grub/grub.cfg"
 
 # Provision genuine GRUB PBKDF2 authentication configuration for bhoot-admin
-echo "  Provisioning genuine GRUB PBKDF2 administrator authentication configuration..."
-GRUB_AUTH_LINE=$(perl -e '
-use Digest::SHA qw(hmac_sha512);
-open my $f, "<:raw", "/dev/urandom" or die "urandom error: $!\n";
-read($f, my $salt_raw, 64) == 64 or die "short read\n";
-my $salt_hex = uc(unpack("H*", $salt_raw));
-my $pwd = $ENV{BHOOT_GRUB_ADMIN_PASS} || unpack("H*", substr($salt_raw, 0, 32));
-my $u = hmac_sha512($salt_raw . pack("N", 1), $pwd);
-my $t = $u;
-for (my $i = 1; $i < 10000; $i++) {
-    $u = hmac_sha512($u, $pwd);
-    $t ^= $u;
-}
-my $hash_hex = uc(unpack("H*", $t));
-print "password_pbkdf2 bhoot-admin grub.pbkdf2.sha512.10000.${salt_hex}.${hash_hex}\n";
-')
-
-echo "$GRUB_AUTH_LINE" > "$MOUNT_POINT/EFI/BOOT/grub-auth.cfg"
-echo "$GRUB_AUTH_LINE" > "$MOUNT_POINT/boot/grub/grub-auth.cfg"
+echo "  Staging GRUB administrator authentication configuration..."
+if [ -n "${BHOOT_GRUB_ADMIN_PASS:-}" ]; then
+    echo "  Generating GRUB PBKDF2 hash from provided environment token..."
+    GRUB_AUTH_LINE=$(printf '%s' "$BHOOT_GRUB_ADMIN_PASS" | perl -e '
+        use strict;
+        use warnings;
+        use Digest::SHA qw(hmac_sha512);
+        my $pwd = <STDIN>;
+        chomp $pwd;
+        open my $f, "<:raw", "/dev/urandom" or die "urandom error: $!\n";
+        read($f, my $salt_raw, 64) == 64 or die "short read\n";
+        my $salt_hex = uc(unpack("H*", $salt_raw));
+        my $u = hmac_sha512($salt_raw . pack("N", 1), $pwd);
+        my $t = $u;
+        for (my $i = 1; $i < 10000; $i++) {
+            $u = hmac_sha512($u, $pwd);
+            $t ^= $u;
+        }
+        $pwd = "0" x length($pwd);
+        my $hash_hex = uc(unpack("H*", $t));
+        print "password_pbkdf2 bhoot-admin grub.pbkdf2.sha512.10000.${salt_hex}.${hash_hex}\n";
+    ')
+    echo "$GRUB_AUTH_LINE" > "$MOUNT_POINT/EFI/BOOT/grub-auth.cfg"
+    echo "$GRUB_AUTH_LINE" > "$MOUNT_POINT/boot/grub/grub-auth.cfg"
+else
+    echo "  No build-time password provided: staging unenrolled marker (enrolled interactively on first boot)..."
+    cat << 'EOF' > "$MOUNT_POINT/EFI/BOOT/grub-auth.cfg"
+# BHOOT GRUB Administrator Authentication Configuration
+# Status: UNENROLLED
+# Enrolled interactively by owner on first boot via bhoot-firstboot-setup
+EOF
+    cp "$MOUNT_POINT/EFI/BOOT/grub-auth.cfg" "$MOUNT_POINT/boot/grub/grub-auth.cfg"
+fi
 chmod 0600 "$MOUNT_POINT/EFI/BOOT/grub-auth.cfg" "$MOUNT_POINT/boot/grub/grub-auth.cfg"
 
 echo "  Copying genuine Linux kernel to /live/vmlinuz..."

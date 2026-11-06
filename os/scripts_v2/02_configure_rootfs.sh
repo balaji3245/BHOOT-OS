@@ -135,7 +135,7 @@ mkdir -p "$SYSTEM_PERSIST_DIR"
 chmod 0755 /var/bhoot 2>/dev/null || true
 chmod 0700 "$SYSTEM_PERSIST_DIR"
 
-# 1. Machine Identity Initialization (Atomic write & bind)
+# 1. Machine Identity Initialization (Atomic write, strict durability & bind)
 if [ -s "$SYSTEM_PERSIST_DIR/machine-id" ]; then
     mount --bind "$SYSTEM_PERSIST_DIR/machine-id" /etc/machine-id
 else
@@ -145,9 +145,20 @@ else
     if [ -n "$MID_HEX" ] && [ ${#MID_HEX} -eq 32 ]; then
         printf '%s\n' "$MID_HEX" > "$MID_TMP"
         chmod 0444 "$MID_TMP"
-        sync "$MID_TMP" 2>/dev/null || true
-        mv -f "$MID_TMP" "$SYSTEM_PERSIST_DIR/machine-id"
-        sync "$SYSTEM_PERSIST_DIR" 2>/dev/null || true
+        if ! sync "$MID_TMP"; then
+            echo "ERROR: Failed to sync temporary machine-id file to durable storage" >&2
+            rm -f "$MID_TMP"
+            exit 1
+        fi
+        if ! mv -f "$MID_TMP" "$SYSTEM_PERSIST_DIR/machine-id"; then
+            echo "ERROR: Failed to atomically link machine-id" >&2
+            rm -f "$MID_TMP"
+            exit 1
+        fi
+        if ! sync "$SYSTEM_PERSIST_DIR"; then
+            echo "ERROR: Failed to sync persistent directory metadata for machine-id" >&2
+            exit 1
+        fi
         mount --bind "$SYSTEM_PERSIST_DIR/machine-id" /etc/machine-id
     else
         echo "ERROR: Failed to generate valid 32-character machine-id" >&2
@@ -218,103 +229,198 @@ else
     done
 fi
 
-# 1. Cryptographic salt generation via direct urandom read in Perl (zero SIGPIPE / pipefail risk)
-SALT=$(perl -e '
-    open my $f, "<:raw", "/dev/urandom" or die "urandom read failed: $!\n";
-    read($f, my $b, 16) == 16 or die "short read\n";
-    my @c = ("A".."Z", "a".."z", "0".."9");
-    print join("", map { $c[ord($_) % scalar(@c)] } split(//, $b));
-')
-if [ -z "$SALT" ] || [ ${#SALT} -ne 16 ]; then
-    echo " [ERROR] Failed to acquire cryptographic salt from /dev/urandom" >&2
-    exit 1
-fi
-
-# 2. Compute password hash: password is piped strictly via STDIN (NEVER in process command-line arguments)
+# 1. Native yescrypt password hash generation (strictly piped via STDIN)
 HASH=$(printf '%s' "$PASSWD_INPUT" | perl -e '
-    my $salt = $ARGV[0];
+    use strict;
+    use warnings;
+    my @b64 = split(//, "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
+    open my $f, "<:raw", "/dev/urandom" or die "urandom error: $!\n";
+    read($f, my $raw, 16) == 16 or die "short read\n";
+    my @b = unpack("C*", $raw);
+    my $salt = "";
+    for (my $i = 0; $i < 15; $i += 3) {
+        my $w = $b[$i] | ($b[$i+1] << 8) | ($b[$i+2] << 16);
+        $salt .= $b64[$w & 0x3f];
+        $salt .= $b64[($w >> 6) & 0x3f];
+        $salt .= $b64[($w >> 12) & 0x3f];
+        $salt .= $b64[($w >> 18) & 0x3f];
+    }
+    my $w15 = $b[15];
+    $salt .= $b64[$w15 & 0x3f];
+    $salt .= $b64[($w15 >> 6) & 0x3f];
+    my $setting = "\$y\$j9T\$$salt";
     my $pwd = <STDIN>;
     chomp $pwd;
     defined $pwd && length($pwd) >= 12 or die "Invalid password length\n";
-    my $h = crypt($pwd, "\$6\$rounds=50000\$$salt\$");
-    $pwd = "0" x length($pwd); # best-effort overwrite in perl memory
+    my $h = crypt($pwd, $setting);
+    $pwd = "0" x length($pwd);
+    die "crypt returned error ($h)\n" if $h eq "*0" || substr($h, 0, 3) ne "\$y\$";
     print $h;
-' "$SALT")
+')
 unset PASSWD_INPUT
 
-if [ -z "$HASH" ] || [ "${HASH:0:3}" != "\$6\$" ]; then
-    echo " [ERROR] Master password hash generation failed!" >&2
+if [ -z "$HASH" ] || [ "${HASH:0:3}" != "\$y\$" ]; then
+    echo " [ERROR] Master password native yescrypt hash generation failed!" >&2
     exit 1
 fi
 
-# 3. Atomically write shadow database to encrypted persistent volume
+# 2. Atomically write shadow database to encrypted persistent volume with strict durability
 SHADOW_TMP="$SYSTEM_PERSIST_DIR/shadow.tmp.$$"
 cp /etc/shadow "$SHADOW_TMP"
 sed -i "s|^root:.*|root:!:19000:0:99999:7:::|" "$SHADOW_TMP"
 sed -i "s|^bhoot:.*|bhoot:${HASH}:19000:0:99999:7:::|" "$SHADOW_TMP"
 chmod 0640 "$SHADOW_TMP"
 chown root:shadow "$SHADOW_TMP"
-sync "$SHADOW_TMP" 2>/dev/null || true
-mv -f "$SHADOW_TMP" "$SYSTEM_PERSIST_DIR/shadow"
-sync "$SYSTEM_PERSIST_DIR" 2>/dev/null || true
+if ! sync "$SHADOW_TMP"; then
+    echo " [ERROR] Failed to sync shadow temporary file!" >&2
+    rm -f "$SHADOW_TMP"
+    exit 1
+fi
+if ! mv -f "$SHADOW_TMP" "$SYSTEM_PERSIST_DIR/shadow"; then
+    echo " [ERROR] Failed to rename shadow database!" >&2
+    rm -f "$SHADOW_TMP"
+    exit 1
+fi
+if ! sync "$SYSTEM_PERSIST_DIR"; then
+    echo " [ERROR] Failed to sync directory metadata for shadow!" >&2
+    exit 1
+fi
 
 mount --bind "$SYSTEM_PERSIST_DIR/shadow" /etc/shadow
 
-# 4. Atomic Machine-ID Generation
+echo "YESCRYPT_ACTIVE: ${HASH:0:8}..." > /var/bhoot/shadow_algo.proof
+chmod 0644 /var/bhoot/shadow_algo.proof
+sync /var/bhoot/shadow_algo.proof 2>/dev/null || true
+cp -f /var/bhoot/shadow_algo.proof "$SYSTEM_PERSIST_DIR/shadow_algo.proof" 2>/dev/null || true
+
+# 3. Atomic Machine-ID Generation with Strict Durability
 if [ ! -s "$SYSTEM_PERSIST_DIR/machine-id" ]; then
     MID_TMP="$SYSTEM_PERSIST_DIR/machine-id.tmp.$$"
     MID_HEX=$(perl -e 'open my $f, "<:raw", "/dev/urandom" or die; read($f, my $b, 16) == 16 or die; print unpack("H*", $b);' 2>/dev/null || od -vAn -N16 -tx1 /dev/urandom | tr -d ' \n')
     if [ -n "$MID_HEX" ] && [ ${#MID_HEX} -eq 32 ]; then
         printf '%s\n' "$MID_HEX" > "$MID_TMP"
         chmod 0444 "$MID_TMP"
-        sync "$MID_TMP" 2>/dev/null || true
-        mv -f "$MID_TMP" "$SYSTEM_PERSIST_DIR/machine-id"
-        sync "$SYSTEM_PERSIST_DIR" 2>/dev/null || true
+        if ! sync "$MID_TMP"; then
+            echo " [ERROR] Failed to sync machine-id temporary file!" >&2
+            rm -f "$MID_TMP"
+            exit 1
+        fi
+        if ! mv -f "$MID_TMP" "$SYSTEM_PERSIST_DIR/machine-id"; then
+            echo " [ERROR] Failed to atomically rename machine-id!" >&2
+            rm -f "$MID_TMP"
+            exit 1
+        fi
+        if ! sync "$SYSTEM_PERSIST_DIR"; then
+            echo " [ERROR] Failed to sync directory metadata for machine-id!" >&2
+            exit 1
+        fi
         mount --bind "$SYSTEM_PERSIST_DIR/machine-id" /etc/machine-id
     fi
 fi
 
-# 5. Provision GRUB Administrator Authentication if ESP is mounted
-if mountpoint -q /boot/efi 2>/dev/null || mount -t vfat -o rw /dev/disk/by-label/BHOOT_EFI /boot/efi 2>/dev/null; then
+# 4. Interactive Owner GRUB Administrator Password Enrollment (Separate from master user password)
+echo "========================================================================"
+echo " Establish GRUB Administrator Password for 'bhoot-admin'"
+echo " Required to access offline recovery shell and edit boot parameters."
+echo "========================================================================"
+
+GRUB_TOKEN_FILE="/run/bhoot/grub_provisioning_token"
+
+if [ -f "$GRUB_TOKEN_FILE" ]; then
+    GRUB_PASS_INPUT=$(cat "$GRUB_TOKEN_FILE")
+    shred -u "$GRUB_TOKEN_FILE" 2>/dev/null || rm -f "$GRUB_TOKEN_FILE"
+else
+    while true; do
+        read -s -p " Enter new GRUB administrator password (min 12 chars): " GPASS1
+        echo ""
+        if [ ${#GPASS1} -lt 12 ]; then
+            echo " [!] Password too short. Minimum length is 12 characters."
+            continue
+        fi
+        read -s -p " Confirm GRUB administrator password: " GPASS2
+        echo ""
+        if [ "$GPASS1" != "$GPASS2" ]; then
+            echo " [!] Passwords do not match. Please try again."
+            continue
+        fi
+        GRUB_PASS_INPUT="$GPASS1"
+        unset GPASS1 GPASS2
+        break
+    done
+fi
+
+if mount -o remount,rw /boot/efi 2>/dev/null || mount -t vfat -o rw /dev/disk/by-label/BHOOT_EFI /boot/efi 2>/dev/null; then
     mkdir -p /boot/efi/EFI/BOOT /boot/efi/boot/grub 2>/dev/null || true
-    if [ ! -f /boot/efi/EFI/BOOT/grub-auth.cfg ]; then
-        GRUB_AUTH_TMP="/boot/efi/EFI/BOOT/grub-auth.cfg.tmp.$$"
-        perl -e '
+    GRUB_AUTH_TMP="/boot/efi/EFI/BOOT/grub-auth.cfg.tmp.$$"
+    if [ -x /usr/local/bin/bhoot-grub-pbkdf2 ]; then
+        GRUB_AUTH_LINE=$(printf '%s' "$GRUB_PASS_INPUT" | /usr/local/bin/bhoot-grub-pbkdf2)
+    else
+        GRUB_AUTH_LINE=$(printf '%s' "$GRUB_PASS_INPUT" | perl -e '
+            use strict;
+            use warnings;
             use Digest::SHA qw(hmac_sha512);
-            open my $f, "<:raw", "/dev/urandom" or die;
-            read($f, my $salt_raw, 64) == 64 or die;
+            my $pwd = <STDIN>;
+            chomp $pwd;
+            open my $f, "<:raw", "/dev/urandom" or die "urandom error: $!\n";
+            read($f, my $salt_raw, 64) == 64 or die "short read\n";
             my $salt_hex = uc(unpack("H*", $salt_raw));
-            read($f, my $pwd_raw, 32) == 32 or die;
-            my $pwd = unpack("H*", $pwd_raw);
             my $u = hmac_sha512($salt_raw . pack("N", 1), $pwd);
             my $t = $u;
             for (my $i = 1; $i < 10000; $i++) {
                 $u = hmac_sha512($u, $pwd);
                 $t ^= $u;
             }
+            $pwd = "0" x length($pwd);
             my $hash_hex = uc(unpack("H*", $t));
             print "password_pbkdf2 bhoot-admin grub.pbkdf2.sha512.10000.${salt_hex}.${hash_hex}\n";
-        ' > "$GRUB_AUTH_TMP" 2>/dev/null || true
-        if [ -s "$GRUB_AUTH_TMP" ]; then
-            chmod 0600 "$GRUB_AUTH_TMP" 2>/dev/null || true
-            mv -f "$GRUB_AUTH_TMP" /boot/efi/EFI/BOOT/grub-auth.cfg 2>/dev/null || true
-            cp -f /boot/efi/EFI/BOOT/grub-auth.cfg /boot/efi/boot/grub/grub-auth.cfg 2>/dev/null || true
-        fi
+        ')
     fi
+    unset GRUB_PASS_INPUT
+
+    if [ -n "$GRUB_AUTH_LINE" ] && [ "${GRUB_AUTH_LINE:0:15}" = "password_pbkdf2" ]; then
+        printf '%s\n' "$GRUB_AUTH_LINE" > "$GRUB_AUTH_TMP"
+        chmod 0600 "$GRUB_AUTH_TMP" 2>/dev/null || true
+        if ! sync "$GRUB_AUTH_TMP"; then
+            echo " [ERROR] Failed to sync temporary grub-auth.cfg!" >&2
+            rm -f "$GRUB_AUTH_TMP"
+            exit 1
+        fi
+        if ! mv -f "$GRUB_AUTH_TMP" /boot/efi/EFI/BOOT/grub-auth.cfg; then
+            echo " [ERROR] Failed to rename grub-auth.cfg!" >&2
+            rm -f "$GRUB_AUTH_TMP"
+            exit 1
+        fi
+        cp -f /boot/efi/EFI/BOOT/grub-auth.cfg /boot/efi/boot/grub/grub-auth.cfg 2>/dev/null || true
+        sync /boot/efi/EFI/BOOT 2>/dev/null || true
+        echo " [OK] GRUB administrator authentication configured successfully."
+    else
+        echo " [ERROR] Failed to compute GRUB PBKDF2 authentication line!" >&2
+        exit 1
+    fi
+    mount -o remount,ro /boot/efi 2>/dev/null || true
 fi
 
-# 6. Mark successful initialization ONLY after all steps succeed
+# 5. Mark successful initialization ONLY after all steps succeed
 date -u +"%Y-%m-%dT%H:%M:%SZ" > "$INIT_FLAG"
 chmod 0644 "$INIT_FLAG"
+sync "$INIT_FLAG"
 
 echo "BHOOT_LIFECYCLE_PERSISTENCE_2026" > /var/bhoot/lifecycle_proof.txt
 chmod 0644 /var/bhoot/lifecycle_proof.txt
+sync /var/bhoot/lifecycle_proof.txt
+sync /var/bhoot
 
 echo " [OK] Master user credentials successfully provisioned to encrypted storage."
 echo " [OK] Proceeding to login..."
 echo "========================================================================"
 EOF
 chmod 0755 "$ROOTFS/usr/local/sbin/bhoot-firstboot-setup"
+
+# Compile and install bhoot-grub-pbkdf2 helper utility into rootfs
+echo "  Compiling and installing bhoot-grub-pbkdf2 helper..."
+mkdir -p "$ROOTFS/usr/local/bin"
+gcc -O2 -Wall -Wextra -Werror "$OS_DIR/tools/bhoot-grub-pbkdf2.c" -lcrypto -o "$ROOTFS/usr/local/bin/bhoot-grub-pbkdf2"
+chmod 0755 "$ROOTFS/usr/local/bin/bhoot-grub-pbkdf2"
 
 # Install Systemd units for early security init and first-boot provisioning
 cat << 'EOF' > "$ROOTFS/etc/systemd/system/bhoot-security-init.service"

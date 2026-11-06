@@ -331,7 +331,7 @@ artifacts_meta = [
 
 manifest_data = {
     "project": "BHOOT",
-    "phase": "2A.8",
+    "phase": "2A.10",
     "target_platform": "Dedicated Bootable USB (UEFI x86_64)",
     "base_distribution": "Debian 12 Bookworm amd64",
     "kernel": "Linux 6.1.0-50-amd64",
@@ -346,23 +346,33 @@ for item in artifacts_meta:
         if item["hash_mode"] == "full":
             digest = hash_file(path)
             digest_field = "sha256"
+            scope = "FULL_FILE_SHA256"
+            hashed_bytes = st.st_size
         elif item["hash_mode"] == "header_16m":
             digest = hash_file(path, max_bytes=16 * 1024 * 1024)
             digest_field = "header_16m_sha256"
+            scope = "HEADER_ONLY_SHA256"
+            hashed_bytes = min(st.st_size, 16 * 1024 * 1024)
         elif item["hash_mode"] == "gpt_header_2m":
             digest = hash_file(path, max_bytes=2 * 1024 * 1024)
             digest_field = "gpt_header_2m_sha256"
+            scope = "PARTITION_HEADER_SHA256"
+            hashed_bytes = min(st.st_size, 2 * 1024 * 1024)
 
+        pct = (hashed_bytes / st.st_size * 100) if st.st_size > 0 else 100.0
         entry = {
             "filename": item["filename"],
             "role": item["role"],
             "description": item["description"],
+            "verification_scope": scope,
             "logical_size_bytes": st.st_size,
             "allocated_size_bytes": st.st_blocks * 512,
+            "hashed_bytes": hashed_bytes,
+            "verification_percentage": round(pct, 4),
             digest_field: digest
         }
         manifest_data["artifacts"].append(entry)
-        print(f"  Checksum: {item['filename']} -> {digest[:16]}... ({st.st_size} bytes)")
+        print(f"  Checksum: {item['filename']} [{scope}] -> {digest[:16]}... ({st.st_size} bytes, {pct:.2f}%)")
 
 with open(MANIFEST_FILE, "w") as out:
     json.dump(manifest_data, out, indent=2)
