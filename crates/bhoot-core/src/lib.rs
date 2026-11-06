@@ -1,14 +1,24 @@
 pub mod account;
+pub mod budget;
 pub mod error;
+pub mod export;
 pub mod ledger;
 pub mod money;
+pub mod report;
 pub mod trading;
 pub mod transaction;
 
 pub use account::{Account, AccountId, AccountStatus, AccountSubtype, AccountType, NormalBalance};
+pub use budget::{
+    Budget, BudgetPeriod, BudgetReport, BudgetStatus, CategoryBudget, CategoryBudgetReport,
+};
 pub use error::CoreError;
+pub use export::{
+    export_trades_csv, export_transactions_csv, sanitize_csv_cell, CSV_SECURITY_BANNER,
+};
 pub use ledger::Ledger;
 pub use money::Money;
+pub use report::{AccountSummaryItem, BalanceSheet, CashFlowStatement, IncomeStatement};
 pub use trading::{
     BrokerAccount, PayoutRecord, PayoutStatus, TradeCharges, TradeRecord, TradeType,
 };
@@ -639,5 +649,186 @@ mod tests {
         let pos_half_rupee = Money::from_rupees_and_paisa_signed(false, 0, 50).expect("valid");
         assert_eq!(pos_half_rupee.as_paisa(), 50);
         assert_eq!(pos_half_rupee.format_inr(), "₹0.50");
+    }
+
+    #[test]
+    fn test_budget_allocation_and_utilization_evaluation() {
+        use std::collections::HashMap;
+
+        let start = Utc::now();
+        let end = start + chrono::Duration::days(30);
+
+        let groceries = CategoryBudget::new("Groceries", Money::from_paisa(20_000 * 100), 80).unwrap();
+        let rent = CategoryBudget::new("Rent", Money::from_paisa(40_000 * 100), 90).unwrap();
+        let dining = CategoryBudget::new("Dining", Money::from_paisa(10_000 * 100), 75).unwrap();
+
+        let budget = Budget::new(
+            "November 2026 Household",
+            BudgetPeriod::Monthly,
+            start,
+            end,
+            vec![groceries, rent, dining],
+            Some("Essential & lifestyle expenses".into()),
+        )
+        .unwrap();
+
+        assert_eq!(budget.total_allocated().unwrap().as_paisa(), 70_000 * 100);
+
+        let mut spending = HashMap::new();
+        // Groceries: 15,000 / 20,000 = 75% -> OnTrack (< 80%)
+        spending.insert("Groceries".into(), Money::from_paisa(15_000 * 100));
+        // Rent: 36,000 / 40,000 = 90% -> Warning (>= 90%)
+        spending.insert("Rent".into(), Money::from_paisa(36_000 * 100));
+        // Dining: 12,000 / 10,000 = 120% -> Exceeded (>= 100%)
+        spending.insert("Dining".into(), Money::from_paisa(12_000 * 100));
+
+        let report = budget.evaluate_spending(&spending).unwrap();
+        assert_eq!(report.total_spent.as_paisa(), 63_000 * 100);
+        assert_eq!(report.total_remaining.as_paisa(), 7_000 * 100);
+        assert_eq!(report.overall_utilization_basis_points, 9000); // 90.00%
+
+        let groc_rep = report.category_reports.iter().find(|r| r.category == "Groceries").unwrap();
+        assert_eq!(groc_rep.status, BudgetStatus::OnTrack);
+        assert_eq!(groc_rep.utilization_basis_points, 7500);
+
+        let rent_rep = report.category_reports.iter().find(|r| r.category == "Rent").unwrap();
+        assert_eq!(rent_rep.status, BudgetStatus::Warning);
+        assert_eq!(rent_rep.utilization_basis_points, 9000);
+
+        let din_rep = report.category_reports.iter().find(|r| r.category == "Dining").unwrap();
+        assert_eq!(din_rep.status, BudgetStatus::Exceeded);
+        assert_eq!(din_rep.utilization_basis_points, 12000);
+    }
+
+    #[test]
+    fn test_financial_reporting_balance_sheet_and_pnl() {
+        let now = Utc::now();
+        let hdfc_id = AccountId::new_v4();
+        let zerodha_id = AccountId::new_v4();
+        let cc_id = AccountId::new_v4();
+        let equity_id = AccountId::new_v4();
+
+        let assets = vec![
+            AccountSummaryItem {
+                account_id: hdfc_id,
+                name: "HDFC Bank".into(),
+                subtype: AccountSubtype::BankAccount,
+                balance: Money::from_paisa(500_000 * 100),
+            },
+            AccountSummaryItem {
+                account_id: zerodha_id,
+                name: "Zerodha Demat".into(),
+                subtype: AccountSubtype::BrokerAccount,
+                balance: Money::from_paisa(300_000 * 100),
+            },
+        ];
+
+        let liabilities = vec![AccountSummaryItem {
+            account_id: cc_id,
+            name: "HDFC Credit Card".into(),
+            subtype: AccountSubtype::CreditCard,
+            balance: Money::from_paisa(100_000 * 100),
+        }];
+
+        let equity = vec![AccountSummaryItem {
+            account_id: equity_id,
+            name: "Owner Equity".into(),
+            subtype: AccountSubtype::RetainedEarnings,
+            balance: Money::from_paisa(500_000 * 100),
+        }];
+
+        // Total Assets = 800,000
+        // Total Liabilities = 100,000
+        // Net Worth = 700,000
+        // Claims: Liabilities(100k) + Equity(500k) + RetainedEarnings(200k) = 800k -> Balanced!
+        let bs = BalanceSheet::new(
+            now,
+            assets,
+            liabilities,
+            equity,
+            Money::from_paisa(200_000 * 100),
+        )
+        .unwrap();
+
+        assert_eq!(bs.total_assets.as_paisa(), 800_000 * 100);
+        assert_eq!(bs.total_liabilities.as_paisa(), 100_000 * 100);
+        assert_eq!(bs.net_worth.as_paisa(), 700_000 * 100);
+        assert!(bs.is_balanced);
+
+        // P&L
+        let op_inc = vec![AccountSummaryItem {
+            account_id: AccountId::new_v4(),
+            name: "Consulting Salary".into(),
+            subtype: AccountSubtype::Salary,
+            balance: Money::from_paisa(200_000 * 100),
+        }];
+        let op_exp = vec![AccountSummaryItem {
+            account_id: AccountId::new_v4(),
+            name: "Office Rent".into(),
+            subtype: AccountSubtype::LivingExpense,
+            balance: Money::from_paisa(50_000 * 100),
+        }];
+
+        let pnl = IncomeStatement::new(
+            now - chrono::Duration::days(30),
+            now,
+            op_inc,
+            Money::from_paisa(50_000 * 100), // Trading gross
+            Money::from_paisa(5_000 * 100),  // Trading charges
+            op_exp,
+        )
+        .unwrap();
+
+        assert_eq!(pnl.trading_net_pnl.as_paisa(), 45_000 * 100);
+        assert_eq!(pnl.total_income.as_paisa(), 245_000 * 100);
+        assert_eq!(pnl.net_profit.as_paisa(), 195_000 * 100); // 245k - 50k
+    }
+
+    #[test]
+    fn test_csv_export_security_sanitization_and_checksum() {
+        let malicious_cell_1 = "=cmd|' /C calc'!A0";
+        let malicious_cell_2 = "+2+3";
+        let safe_cell = "Safe Description";
+
+        assert_eq!(sanitize_csv_cell(malicious_cell_1), "'=cmd|' /C calc'!A0");
+        assert_eq!(sanitize_csv_cell(malicious_cell_2), "'+2+3");
+        assert_eq!(sanitize_csv_cell(safe_cell), "Safe Description");
+
+        // Verify CSV export content
+        let tx = Transaction::new(
+            Utc::now(),
+            TransactionType::Income,
+            vec![
+                Posting::new(
+                    AccountId::new_v4(),
+                    Money::from_paisa(10_000 * 100),
+                    Direction::Debit,
+                    Some("=1+1".into()),
+                )
+                .unwrap(),
+                Posting::new(
+                    AccountId::new_v4(),
+                    Money::from_paisa(10_000 * 100),
+                    Direction::Credit,
+                    None,
+                )
+                .unwrap(),
+            ],
+            Some("Bonus".into()),
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        let csv = export_transactions_csv(&[tx], &std::collections::HashMap::new());
+        assert!(csv.contains(CSV_SECURITY_BANNER));
+        assert!(csv.contains("Data SHA-256 Checksum:"));
+        assert!(csv.contains("Total Transactions: 1"));
+        assert!(csv.contains("Category,PaymentMethod"));
+        // Confirm '=1+1' was sanitized with leading quote
+        assert!(csv.contains("'=1+1"));
     }
 }

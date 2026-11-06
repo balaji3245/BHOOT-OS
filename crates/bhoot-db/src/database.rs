@@ -1,17 +1,19 @@
 use crate::config::SqlCipherConfig;
 use crate::error::DbError;
-use crate::schema::MIGRATION_001_SQL;
+use crate::schema::{MIGRATION_001_SQL, MIGRATION_002_SQL};
 use bhoot_audit::{AuditEvent, AuditEventType};
 use bhoot_core::{
-    Account, AccountId, AccountStatus, AccountSubtype, AccountType, Direction, Money,
-    PayoutRecord, PayoutStatus, Posting, TradeCharges, TradeRecord, Transaction, TransactionId,
-    TransactionType, VerificationStatus,
+    Account, AccountId, AccountStatus, AccountSubtype, AccountType, AccountSummaryItem,
+    BalanceSheet, Budget, BudgetPeriod, BudgetReport, CashFlowStatement, CategoryBudget,
+    Direction, IncomeStatement, Money, PayoutRecord, PayoutStatus, Posting, TradeCharges,
+    TradeRecord, Transaction, TransactionId, TransactionType, VerificationStatus,
 };
 use bhoot_crypto::EncryptedEnvelope;
 use bhoot_vault::{DocumentMimeType, VaultDocument};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -103,6 +105,13 @@ impl Database {
             let tx = self.conn.unchecked_transaction()?;
             tx.execute_batch(MIGRATION_001_SQL)?;
             tx.execute_batch("PRAGMA user_version = 1;")?;
+            tx.commit()?;
+        }
+
+        if version < 2 {
+            let tx = self.conn.unchecked_transaction()?;
+            tx.execute_batch(MIGRATION_002_SQL)?;
+            tx.execute_batch("PRAGMA user_version = 2;")?;
             tx.commit()?;
         }
 
@@ -1021,6 +1030,454 @@ impl Database {
         )?;
         Ok(rows > 0)
     }
+
+    // =========================================================================
+    // BUDGET REPOSITORY
+    // =========================================================================
+
+    /// Save or update a financial budget with its category allocations.
+    pub fn save_budget(&self, budget: &Budget) -> Result<(), DbError> {
+        let tx = self.conn.unchecked_transaction()?;
+
+        tx.execute(
+            "INSERT INTO budgets (id, name, period, start_date, end_date, notes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                period = excluded.period,
+                start_date = excluded.start_date,
+                end_date = excluded.end_date,
+                notes = excluded.notes;",
+            params![
+                budget.id.to_string(),
+                budget.name,
+                format!("{:?}", budget.period),
+                budget.start_date.to_rfc3339(),
+                budget.end_date.to_rfc3339(),
+                budget.notes,
+            ],
+        )?;
+
+        tx.execute(
+            "DELETE FROM category_budgets WHERE budget_id = ?1;",
+            params![budget.id.to_string()],
+        )?;
+
+        let mut cat_stmt = tx.prepare(
+            "INSERT INTO category_budgets (budget_id, category, allocated_paisa, alert_threshold_pct)
+             VALUES (?1, ?2, ?3, ?4);",
+        )?;
+
+        for cat in &budget.categories {
+            cat_stmt.execute(params![
+                budget.id.to_string(),
+                cat.category,
+                cat.allocated.as_paisa(),
+                cat.alert_threshold_pct as i64,
+            ])?;
+        }
+        drop(cat_stmt);
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Retrieve a budget by ID including all category allocations.
+    pub fn get_budget(&self, id: Uuid) -> Result<Option<Budget>, DbError> {
+        let mut b_stmt = self.conn.prepare(
+            "SELECT id, name, period, start_date, end_date, notes
+             FROM budgets WHERE id = ?1;",
+        )?;
+
+        let budget_meta = b_stmt
+            .query_row(params![id.to_string()], |row| {
+                let id_parsed = Uuid::parse_str(&row.get::<_, String>(0)?)
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?;
+                let name: String = row.get(1)?;
+                let period_str: String = row.get(2)?;
+                let start_str: String = row.get(3)?;
+                let end_str: String = row.get(4)?;
+                let notes: Option<String> = row.get(5)?;
+
+                let start_date = DateTime::parse_from_rfc3339(&start_str)
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?
+                    .with_timezone(&Utc);
+                let end_date = DateTime::parse_from_rfc3339(&end_str)
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?
+                    .with_timezone(&Utc);
+
+                Ok((id_parsed, name, parse_budget_period(&period_str), start_date, end_date, notes))
+            })
+            .optional()?;
+
+        let (b_id, name, period, start_date, end_date, notes) = match budget_meta {
+            Some(meta) => meta,
+            None => return Ok(None),
+        };
+
+        let mut cat_stmt = self.conn.prepare(
+            "SELECT category, allocated_paisa, alert_threshold_pct
+             FROM category_budgets WHERE budget_id = ?1 ORDER BY category ASC;",
+        )?;
+
+        let cat_rows = cat_stmt.query_map(params![id.to_string()], |row| {
+            let category: String = row.get(0)?;
+            let allocated_paisa: i64 = row.get(1)?;
+            let threshold: i64 = row.get(2)?;
+
+            Ok(CategoryBudget {
+                category,
+                allocated: Money::from_paisa(allocated_paisa),
+                alert_threshold_pct: threshold.clamp(1, 100) as u8,
+            })
+        })?;
+
+        let mut categories = Vec::new();
+        for cat in cat_rows {
+            categories.push(cat?);
+        }
+
+        Ok(Some(Budget {
+            id: b_id,
+            name,
+            period,
+            start_date,
+            end_date,
+            categories,
+            notes,
+        }))
+    }
+
+    /// List all budgets ordered by start date descending.
+    pub fn list_budgets(&self) -> Result<Vec<Budget>, DbError> {
+        let mut stmt = self.conn.prepare("SELECT id FROM budgets ORDER BY start_date DESC;")?;
+        let id_rows = stmt.query_map([], |row| {
+            let id_str: String = row.get(0)?;
+            Uuid::parse_str(&id_str).map_err(|_| rusqlite::Error::InvalidQuery)
+        })?;
+
+        let mut budgets = Vec::new();
+        for id_res in id_rows {
+            let id = id_res?;
+            if let Some(b) = self.get_budget(id)? {
+                budgets.push(b);
+            }
+        }
+        Ok(budgets)
+    }
+
+    /// Aggregate realized net spending per category within a given date window.
+    pub fn get_spending_by_category(
+        &self,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Result<HashMap<String, Money>, DbError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT 
+                COALESCE(t.category, a.name) as cat,
+                SUM(CASE WHEN p.direction = 'Debit' THEN p.amount_paisa ELSE -p.amount_paisa END) as net_expense
+             FROM postings p
+             JOIN transactions t ON p.transaction_id = t.id
+             JOIN accounts a ON p.account_id = a.id
+             WHERE a.account_type = 'Expense'
+               AND t.timestamp >= ?1 AND t.timestamp <= ?2
+             GROUP BY cat;",
+        )?;
+
+        let rows = stmt.query_map(params![from.to_rfc3339(), to.to_rfc3339()], |row| {
+            let cat: String = row.get(0)?;
+            let amount: i64 = row.get(1)?;
+            Ok((cat, Money::from_paisa(amount.max(0))))
+        })?;
+
+        let mut map = HashMap::new();
+        for r in rows {
+            let (cat, money) = r?;
+            map.insert(cat, money);
+        }
+        Ok(map)
+    }
+
+    /// Evaluate budget execution and spending utilization for a given budget.
+    pub fn evaluate_budget(&self, id: Uuid) -> Result<Option<BudgetReport>, DbError> {
+        let budget = match self.get_budget(id)? {
+            Some(b) => b,
+            None => return Ok(None),
+        };
+
+        let spending = self.get_spending_by_category(budget.start_date, budget.end_date)?;
+        let report = budget.evaluate_spending(&spending)?;
+        Ok(Some(report))
+    }
+
+    // =========================================================================
+    // FINANCIAL REPORTING ENGINE
+    // =========================================================================
+
+    /// Generate an audited point-in-time Balance Sheet statement.
+    pub fn generate_balance_sheet(&self, as_of: DateTime<Utc>) -> Result<BalanceSheet, DbError> {
+        let accounts = self.list_accounts()?;
+        let as_of_str = as_of.to_rfc3339();
+
+        let mut stmt = self.conn.prepare(
+            "SELECT 
+                p.direction,
+                p.amount_paisa
+             FROM postings p
+             JOIN transactions t ON p.transaction_id = t.id
+             WHERE p.account_id = ?1 AND t.timestamp <= ?2;",
+        )?;
+
+        let mut assets = Vec::new();
+        let mut liabilities = Vec::new();
+        let mut equity = Vec::new();
+        let mut total_income = Money::ZERO;
+        let mut total_expense = Money::ZERO;
+
+        for acc in accounts {
+            let mut debit = Money::ZERO;
+            let mut credit = Money::ZERO;
+
+            let mut rows = stmt.query(params![acc.id.to_string(), as_of_str])?;
+            while let Some(row) = rows.next()? {
+                let dir: String = row.get(0)?;
+                let amount = Money::from_paisa(row.get(1)?);
+                if dir == "Debit" {
+                    debit = debit.checked_add(amount)?;
+                } else {
+                    credit = credit.checked_add(amount)?;
+                }
+            }
+
+            match acc.account_type {
+                AccountType::Asset => {
+                    let balance = debit.checked_sub(credit)?;
+                    assets.push(AccountSummaryItem {
+                        account_id: acc.id,
+                        name: acc.name,
+                        subtype: acc.subtype,
+                        balance,
+                    });
+                }
+                AccountType::Liability => {
+                    let balance = credit.checked_sub(debit)?;
+                    liabilities.push(AccountSummaryItem {
+                        account_id: acc.id,
+                        name: acc.name,
+                        subtype: acc.subtype,
+                        balance,
+                    });
+                }
+                AccountType::Equity => {
+                    let balance = credit.checked_sub(debit)?;
+                    equity.push(AccountSummaryItem {
+                        account_id: acc.id,
+                        name: acc.name,
+                        subtype: acc.subtype,
+                        balance,
+                    });
+                }
+                AccountType::Income => {
+                    let balance = credit.checked_sub(debit)?;
+                    total_income = total_income.checked_add(balance)?;
+                }
+                AccountType::Expense => {
+                    let balance = debit.checked_sub(credit)?;
+                    total_expense = total_expense.checked_add(balance)?;
+                }
+            }
+        }
+
+        // Incorporate realized trading net P&L up to as_of into retained earnings
+        let trading_summary = self.get_trading_summary(None)?;
+        let trading_net = Money::from_paisa(trading_summary.net_pnl_paisa);
+
+        let retained_earnings = total_income
+            .checked_add(trading_net)?
+            .checked_sub(total_expense)?;
+
+        let sheet = BalanceSheet::new(as_of, assets, liabilities, equity, retained_earnings)?;
+        Ok(sheet)
+    }
+
+    /// Generate an Income Statement (Profit & Loss) for a specified period.
+    pub fn generate_income_statement(
+        &self,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Result<IncomeStatement, DbError> {
+        let accounts = self.list_accounts()?;
+        let from_str = from.to_rfc3339();
+        let to_str = to.to_rfc3339();
+
+        let mut stmt = self.conn.prepare(
+            "SELECT 
+                p.direction,
+                p.amount_paisa
+             FROM postings p
+             JOIN transactions t ON p.transaction_id = t.id
+             WHERE p.account_id = ?1 AND t.timestamp >= ?2 AND t.timestamp <= ?3;",
+        )?;
+
+        let mut operating_income = Vec::new();
+        let mut operating_expenses = Vec::new();
+
+        for acc in accounts {
+            if acc.account_type != AccountType::Income && acc.account_type != AccountType::Expense {
+                continue;
+            }
+
+            let mut debit = Money::ZERO;
+            let mut credit = Money::ZERO;
+
+            let mut rows = stmt.query(params![acc.id.to_string(), from_str, to_str])?;
+            while let Some(row) = rows.next()? {
+                let dir: String = row.get(0)?;
+                let amount = Money::from_paisa(row.get(1)?);
+                if dir == "Debit" {
+                    debit = debit.checked_add(amount)?;
+                } else {
+                    credit = credit.checked_add(amount)?;
+                }
+            }
+
+            if acc.account_type == AccountType::Income {
+                let balance = credit.checked_sub(debit)?;
+                operating_income.push(AccountSummaryItem {
+                    account_id: acc.id,
+                    name: acc.name,
+                    subtype: acc.subtype,
+                    balance,
+                });
+            } else {
+                let balance = debit.checked_sub(credit)?;
+                operating_expenses.push(AccountSummaryItem {
+                    account_id: acc.id,
+                    name: acc.name,
+                    subtype: acc.subtype,
+                    balance,
+                });
+            }
+        }
+
+        // Trading performance between from and to
+        let mut trade_stmt = self.conn.prepare(
+            "SELECT COALESCE(SUM(gross_pnl_paisa), 0), COALESCE(SUM(total_charges_paisa), 0)
+             FROM trades WHERE trade_date >= ?1 AND trade_date <= ?2;",
+        )?;
+
+        let (trading_gross_paisa, trading_charges_paisa): (i64, i64) = trade_stmt
+            .query_row(params![from_str, to_str], |r| Ok((r.get(0)?, r.get(1)?)))?;
+
+        let statement = IncomeStatement::new(
+            from,
+            to,
+            operating_income,
+            Money::from_paisa(trading_gross_paisa),
+            Money::from_paisa(trading_charges_paisa),
+            operating_expenses,
+        )?;
+
+        Ok(statement)
+    }
+
+    /// Generate a Cash Flow Statement tracking liquid funds across bank and cash wallets.
+    pub fn generate_cash_flow_statement(
+        &self,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Result<CashFlowStatement, DbError> {
+        let accounts = self.list_accounts()?;
+        let from_str = from.to_rfc3339();
+        let to_str = to.to_rfc3339();
+
+        let mut beginning_cash = Money::ZERO;
+        let mut ending_cash = Money::ZERO;
+
+        let mut before_stmt = self.conn.prepare(
+            "SELECT p.direction, p.amount_paisa
+             FROM postings p
+             JOIN transactions t ON p.transaction_id = t.id
+             WHERE p.account_id = ?1 AND t.timestamp < ?2;",
+        )?;
+
+        let mut interval_stmt = self.conn.prepare(
+            "SELECT p.direction, p.amount_paisa
+             FROM postings p
+             JOIN transactions t ON p.transaction_id = t.id
+             WHERE p.account_id = ?1 AND t.timestamp >= ?2 AND t.timestamp <= ?3;",
+        )?;
+
+        let mut investing_cash_flow = Money::ZERO;
+        let mut financing_cash_flow = Money::ZERO;
+
+        for acc in accounts {
+            let is_liquid_cash = matches!(
+                acc.subtype,
+                AccountSubtype::BankAccount | AccountSubtype::UPIWallet | AccountSubtype::CashWallet
+            );
+
+            if is_liquid_cash {
+                // Balance before 'from'
+                let mut b_debit = Money::ZERO;
+                let mut b_credit = Money::ZERO;
+                let mut b_rows = before_stmt.query(params![acc.id.to_string(), from_str])?;
+                while let Some(row) = b_rows.next()? {
+                    let dir: String = row.get(0)?;
+                    let amount = Money::from_paisa(row.get(1)?);
+                    if dir == "Debit" {
+                        b_debit = b_debit.checked_add(amount)?;
+                    } else {
+                        b_credit = b_credit.checked_add(amount)?;
+                    }
+                }
+                let beg_bal = b_debit.checked_sub(b_credit)?;
+                beginning_cash = beginning_cash.checked_add(beg_bal)?;
+
+                // Balance between 'from' and 'to'
+                let mut i_debit = Money::ZERO;
+                let mut i_credit = Money::ZERO;
+                let mut i_rows = interval_stmt.query(params![acc.id.to_string(), from_str, to_str])?;
+                while let Some(row) = i_rows.next()? {
+                    let dir: String = row.get(0)?;
+                    let amount = Money::from_paisa(row.get(1)?);
+                    if dir == "Debit" {
+                        i_debit = i_debit.checked_add(amount)?;
+                    } else {
+                        i_credit = i_credit.checked_add(amount)?;
+                    }
+                }
+                let interval_bal = i_debit.checked_sub(i_credit)?;
+                ending_cash = ending_cash.checked_add(beg_bal.checked_add(interval_bal)?)?;
+            }
+        }
+
+        // Net change in liquid cash
+        let net_cash_change = ending_cash.checked_sub(beginning_cash)?;
+
+        // Operating activities: net income
+        let pnl = self.generate_income_statement(from, to)?;
+        let operating_cash_flow = pnl.net_profit;
+
+        // Balance of financing and investing
+        let remainder = net_cash_change.checked_sub(operating_cash_flow)?;
+        if remainder.is_positive() {
+            financing_cash_flow = remainder;
+        } else {
+            investing_cash_flow = remainder;
+        }
+
+        let statement = CashFlowStatement::new(
+            from,
+            to,
+            operating_cash_flow,
+            investing_cash_flow,
+            financing_cash_flow,
+            beginning_cash,
+        )?;
+
+        Ok(statement)
+    }
 }
 
 // =============================================================================
@@ -1149,5 +1606,14 @@ fn parse_mime_type(s: &str) -> DocumentMimeType {
         "Png" => DocumentMimeType::Png,
         "Jpeg" => DocumentMimeType::Jpeg,
         _ => DocumentMimeType::Pdf,
+    }
+}
+
+fn parse_budget_period(s: &str) -> BudgetPeriod {
+    match s {
+        "Monthly" => BudgetPeriod::Monthly,
+        "Quarterly" => BudgetPeriod::Quarterly,
+        "Annual" => BudgetPeriod::Annual,
+        _ => BudgetPeriod::Custom,
     }
 }

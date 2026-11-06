@@ -6,14 +6,15 @@ pub mod schema;
 pub use config::SqlCipherConfig;
 pub use database::{Database, TradingSummary, VaultDocumentSummary};
 pub use error::DbError;
-pub use schema::MIGRATION_001_SQL;
+pub use schema::{MIGRATION_001_SQL, MIGRATION_002_SQL};
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use bhoot_core::{
-        Account, AccountSubtype, AccountType, Direction, Money, Posting, TradeCharges,
-        TradeRecord, TradeType, Transaction, TransactionId, TransactionType,
+        Account, AccountSubtype, AccountType, Budget, BudgetPeriod, BudgetStatus, CategoryBudget,
+        Direction, Money, Posting, TradeCharges, TradeRecord, TradeType, Transaction,
+        TransactionId, TransactionType,
     };
     use chrono::Utc;
     use std::fs;
@@ -336,5 +337,183 @@ mod tests {
         assert_eq!(summary.win_rate_basis_points, 5000); // 50.00%
         assert_eq!(summary.net_pnl_paisa, 5_200_00); // +5,200 INR
         assert_eq!(summary.total_charges_paisa, 800_00); // 800 INR
+    }
+
+    #[test]
+    fn test_budget_persistence_and_evaluation_in_database() {
+        let db = Database::open_in_memory(&test_key_1()).unwrap();
+
+        let bank = Account::new("Checking", AccountType::Asset, AccountSubtype::BankAccount, None);
+        let groceries_acc = Account::new("Groceries", AccountType::Expense, AccountSubtype::LivingExpense, None);
+        let rent_acc = Account::new("Rent", AccountType::Expense, AccountSubtype::LivingExpense, None);
+
+        db.create_account(&bank).unwrap();
+        db.create_account(&groceries_acc).unwrap();
+        db.create_account(&rent_acc).unwrap();
+
+        let now = Utc::now();
+
+        // Post expense: Groceries 15,000 INR
+        let tx1 = Transaction::new(
+            now,
+            TransactionType::Expense,
+            vec![
+                Posting::new(groceries_acc.id, Money::from_paisa(15_000 * 100), Direction::Debit, None).unwrap(),
+                Posting::new(bank.id, Money::from_paisa(15_000 * 100), Direction::Credit, None).unwrap(),
+            ],
+            Some("Groceries".into()),
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        // Post expense: Rent 45,000 INR
+        let tx2 = Transaction::new(
+            now,
+            TransactionType::Expense,
+            vec![
+                Posting::new(rent_acc.id, Money::from_paisa(45_000 * 100), Direction::Debit, None).unwrap(),
+                Posting::new(bank.id, Money::from_paisa(45_000 * 100), Direction::Credit, None).unwrap(),
+            ],
+            Some("Rent".into()),
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        db.post_transaction(&tx1).unwrap();
+        db.post_transaction(&tx2).unwrap();
+
+        let b = Budget::new(
+            "Monthly Living",
+            BudgetPeriod::Monthly,
+            now - chrono::Duration::days(1),
+            now + chrono::Duration::days(29),
+            vec![
+                CategoryBudget::new("Groceries", Money::from_paisa(20_000 * 100), 80).unwrap(),
+                CategoryBudget::new("Rent", Money::from_paisa(40_000 * 100), 90).unwrap(),
+            ],
+            Some("Q4 Budget".into()),
+        )
+        .unwrap();
+
+        db.save_budget(&b).unwrap();
+
+        let fetched = db.get_budget(b.id).unwrap().expect("Budget found");
+        assert_eq!(fetched.name, "Monthly Living");
+        assert_eq!(fetched.categories.len(), 2);
+
+        let report = db.evaluate_budget(b.id).unwrap().expect("Report evaluated");
+        assert_eq!(report.total_allocated.as_paisa(), 60_000 * 100);
+        assert_eq!(report.total_spent.as_paisa(), 60_000 * 100);
+
+        let groc = report.category_reports.iter().find(|r| r.category == "Groceries").unwrap();
+        assert_eq!(groc.spent.as_paisa(), 15_000 * 100);
+        assert_eq!(groc.status, BudgetStatus::OnTrack);
+
+        let rent = report.category_reports.iter().find(|r| r.category == "Rent").unwrap();
+        assert_eq!(rent.spent.as_paisa(), 45_000 * 100);
+        assert_eq!(rent.status, BudgetStatus::Exceeded);
+    }
+
+    #[test]
+    fn test_financial_reporting_queries_balance_sheet_and_pnl() {
+        let db = Database::open_in_memory(&test_key_1()).unwrap();
+
+        let bank = Account::new("HDFC Checking", AccountType::Asset, AccountSubtype::BankAccount, None);
+        let credit_card = Account::new("ICICI Credit Card", AccountType::Liability, AccountSubtype::CreditCard, None);
+        let salary = Account::new("Salary Income", AccountType::Income, AccountSubtype::Salary, None);
+        let rent = Account::new("Rent Expense", AccountType::Expense, AccountSubtype::LivingExpense, None);
+        let broker = Account::new("Zerodha Demat", AccountType::Asset, AccountSubtype::BrokerAccount, None);
+
+        db.create_account(&bank).unwrap();
+        db.create_account(&credit_card).unwrap();
+        db.create_account(&salary).unwrap();
+        db.create_account(&rent).unwrap();
+        db.create_account(&broker).unwrap();
+
+        let now = Utc::now();
+
+        // 1. Post Salary: Debit Bank 200,000, Credit Salary 200,000
+        let tx1 = Transaction::new(
+            now,
+            TransactionType::Income,
+            vec![
+                Posting::new(bank.id, Money::from_paisa(200_000 * 100), Direction::Debit, None).unwrap(),
+                Posting::new(salary.id, Money::from_paisa(200_000 * 100), Direction::Credit, None).unwrap(),
+            ],
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+        db.post_transaction(&tx1).unwrap();
+
+        // 2. Post Rent: Debit Rent 50,000, Credit CreditCard 50,000
+        let tx2 = Transaction::new(
+            now,
+            TransactionType::Expense,
+            vec![
+                Posting::new(rent.id, Money::from_paisa(50_000 * 100), Direction::Debit, None).unwrap(),
+                Posting::new(credit_card.id, Money::from_paisa(50_000 * 100), Direction::Credit, None).unwrap(),
+            ],
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+        db.post_transaction(&tx2).unwrap();
+
+        // 3. Post Trade: Gross 30,000, Charges 2,000 -> Net 28,000
+        let trade = TradeRecord::new(
+            broker.id,
+            now,
+            "NIFTY26NOV",
+            TradeType::Futures,
+            Money::from_paisa(30_000 * 100),
+            TradeCharges {
+                brokerage: Money::from_paisa(2_000 * 100),
+                ..Default::default()
+            },
+            Money::from_paisa(28_000 * 100),
+            None,
+            None,
+        )
+        .unwrap();
+        db.record_trade(&trade).unwrap();
+
+        // Test Balance Sheet: Assets(200k bank) = Liabilities(50k cc) + RetainedEarnings(200k inc - 50k exp + 28k trade = 178k)
+        // Wait: Assets = 200,000. Liabilities = 50,000. Net worth = 150,000.
+        // BalanceSheet equilibrium checks: Assets == Liabilities + Equity + RetainedEarnings.
+        let bs = db.generate_balance_sheet(now + chrono::Duration::hours(1)).unwrap();
+        assert_eq!(bs.total_assets.as_paisa(), 200_000 * 100);
+        assert_eq!(bs.total_liabilities.as_paisa(), 50_000 * 100);
+        assert_eq!(bs.net_worth.as_paisa(), 150_000 * 100);
+
+        // Test Income Statement
+        let pnl = db.generate_income_statement(now - chrono::Duration::days(1), now + chrono::Duration::days(1)).unwrap();
+        assert_eq!(pnl.total_operating_income.as_paisa(), 200_000 * 100);
+        assert_eq!(pnl.trading_net_pnl.as_paisa(), 28_000 * 100);
+        assert_eq!(pnl.total_income.as_paisa(), 228_000 * 100);
+        assert_eq!(pnl.total_operating_expenses.as_paisa(), 50_000 * 100);
+        assert_eq!(pnl.net_profit.as_paisa(), 178_000 * 100); // 228k - 50k
+
+        // Test Cash Flow Statement
+        let cfs = db.generate_cash_flow_statement(now - chrono::Duration::days(1), now + chrono::Duration::days(1)).unwrap();
+        assert_eq!(cfs.beginning_cash.as_paisa(), 0);
+        assert_eq!(cfs.ending_cash.as_paisa(), 200_000 * 100);
+        assert_eq!(cfs.net_cash_flow.as_paisa(), 200_000 * 100);
     }
 }
