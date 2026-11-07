@@ -183,10 +183,24 @@ def test_disaster_recovery_workflow():
         subprocess.run(["cryptsetup", "luksHeaderBackup", test_img, "--header-backup-file", backup_file, "--batch-mode"], check=True)
         record_test("Detached LUKS2 header extracted", os.path.exists(backup_file))
 
-        # Test export script with simulated safety checks
+        # Test export script with simulated safety checks (using mock USB allowlist fixture)
+        mock_bin = os.path.join(tmpdir, "mock_bin")
+        os.makedirs(mock_bin, exist_ok=True)
+        with open(os.path.join(mock_bin, "findmnt"), "w") as f:
+            f.write("#!/bin/sh\necho \"/dev/sdb1 ext4 $3\"\n")
+        os.chmod(os.path.join(mock_bin, "findmnt"), 0o755)
+        with open(os.path.join(mock_bin, "udevadm"), "w") as f:
+            f.write("#!/bin/sh\nif [ \"$2\" = \"path\" ]; then echo \"/devices/pci0000:00/0000:00:14.0/usb1/1-1/block/sdb/sdb1\"; else printf \"ID_BUS=usb\\nID_DRIVE_THUMB=1\\n\"; fi\n")
+        os.chmod(os.path.join(mock_bin, "udevadm"), 0o755)
+        with open(os.path.join(mock_bin, "lsblk"), "w") as f:
+            f.write("#!/bin/sh\necho \"sdb\"\n")
+        os.chmod(os.path.join(mock_bin, "lsblk"), 0o755)
+
         export_script = os.path.join(SCRIPT_DIR, "export_recovery_backup.sh")
         export_env = os.environ.copy()
+        export_env["PATH"] = f"{mock_bin}:{export_env.get('PATH', '')}"
         export_env["BHOOT_AUTOMATED_TEST"] = "1"
+        export_env["BHOOT_ALLOWLIST_FIXTURE"] = "1"
         res = subprocess.run([export_script, "--source", backup_file, export_dir], env=export_env, capture_output=True, text=True)
         record_test("export_recovery_backup.sh exported to external medium", res.returncode == 0)
 

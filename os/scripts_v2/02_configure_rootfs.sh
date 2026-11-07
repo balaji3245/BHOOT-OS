@@ -878,22 +878,42 @@ ln -sf /etc/systemd/system/bhoot-desktop.service "$ROOTFS/etc/systemd/system/mul
 cat << 'EOF' > "$ROOTFS/etc/systemd/system/bhoot-gui.service"
 [Unit]
 Description=BHOOT Personal Financial OS Graphical Kiosk
-After=bhoot-desktop.service
-Wants=bhoot-desktop.service
+After=bhoot-desktop.service seatd.service
+Wants=bhoot-desktop.service seatd.service
+Conflicts=getty@tty1.service
 
 [Service]
 Type=simple
 User=bhoot
 Group=bhoot
+SupplementaryGroups=video input render audio tty
+RuntimeDirectory=user/1000
+RuntimeDirectoryMode=0700
 Environment=XDG_RUNTIME_DIR=/run/user/1000
-Environment=WAYLAND_DISPLAY=wayland-0
-# Launch Cage kiosk with Chromium/Firefox if installed; otherwise preserve safe headless server execution
-ExecStart=/bin/sh -c 'if command -v cage >/dev/null 2>&1; then exec cage -- /usr/bin/chromium --kiosk http://127.0.0.1:1420; else echo "BHOOT Graphical Kiosk (Cage) runtime not present; backend server operating on http://127.0.0.1:1420" && sleep infinity; fi'
-Restart=on-failure
-RestartSec=5
+Environment=WLR_BACKENDS=drm
+Environment=WLR_LIBINPUT_NO_DEVICES=1
+Environment=WLR_NO_HARDWARE_CURSORS=1
+Environment=WLR_RENDERER=pixman
+Environment=WLR_RENDERER_ALLOW_SOFTWARE=1
+Environment=LIBGL_ALWAYS_SOFTWARE=1
+Environment=SEATD_SOCK=/run/seatd.sock
+Environment=LIBSEAT_BACKEND=seatd
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+ExecStartPre=+/bin/mkdir -p /run/user/1000 /home/bhoot/.cache /home/bhoot/.config
+ExecStartPre=+/bin/chown -R bhoot:bhoot /run/user/1000 /home/bhoot
+ExecStartPre=+/bin/chmod 0700 /run/user/1000 /home/bhoot/.cache /home/bhoot/.config
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do (echo > /dev/tcp/127.0.0.1/1420) >/dev/null 2>&1 && exit 0; sleep 0.5; done; exit 0'
+ExecStart=/usr/bin/cage -s -- /usr/bin/cog -P wl -b "#000000" --doc-viewer http://127.0.0.1:1420
+Restart=always
+RestartSec=3
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=graphical.target multi-user.target
 EOF
 chmod 0644 "$ROOTFS/etc/systemd/system/bhoot-gui.service"
 ln -sf /etc/systemd/system/bhoot-gui.service "$ROOTFS/etc/systemd/system/multi-user.target.wants/bhoot-gui.service"

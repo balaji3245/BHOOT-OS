@@ -14,7 +14,7 @@ import shutil
 import json
 import hashlib
 
-BIN_PATH = "/home/bhoot/Desktop/BHOOT/target/release/bhoot-desktop"
+BIN_PATH = "/home/bhoot/Desktop/BHOOT/os/build_real/rootfs/usr/local/bin/bhoot-desktop"
 
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
