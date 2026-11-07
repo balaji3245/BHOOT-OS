@@ -890,12 +890,14 @@ SupplementaryGroups=video input render audio tty
 RuntimeDirectory=user/1000
 RuntimeDirectoryMode=0700
 Environment=XDG_RUNTIME_DIR=/run/user/1000
-Environment=WLR_BACKENDS=drm
-Environment=WLR_LIBINPUT_NO_DEVICES=1
+Environment=WLR_BACKENDS=drm,libinput
 Environment=WLR_NO_HARDWARE_CURSORS=1
 Environment=WLR_RENDERER=pixman
 Environment=WLR_RENDERER_ALLOW_SOFTWARE=1
 Environment=LIBGL_ALWAYS_SOFTWARE=1
+Environment=WEBKIT_DISABLE_DMABUF_RENDERER=1
+Environment=GSETTINGS_SCHEMA_DIR=/usr/share/glib-2.0/schemas
+Environment=GIO_MODULE_DIR=/usr/lib/x86_64-linux-gnu/gio/modules
 Environment=SEATD_SOCK=/run/seatd.sock
 Environment=LIBSEAT_BACKEND=seatd
 TTYPath=/dev/tty1

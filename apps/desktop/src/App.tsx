@@ -24,6 +24,8 @@ export const App: React.FC = () => {
   const [isAuthenticating, setIsAuthenticating] = useState(false);
 
   const lastActivityRef = useRef<number>(Date.now());
+  const pinInputRef = useRef<string>('');
+  pinInputRef.current = pinInput;
 
   // Check initial security status & token validity
   useEffect(() => {
@@ -45,13 +47,44 @@ export const App: React.FC = () => {
     };
     checkSecurity();
 
-    // Activity tracking for auto-lock
+    // Activity tracking & global navigation shortcuts
     const recordActivity = () => {
       lastActivityRef.current = Date.now();
     };
 
+    const handleKeyDown = (e: KeyboardEvent) => {
+      recordActivity();
+      if (isLocked) {
+        if (e.key === 'Enter') {
+          doUnlock();
+        } else if (/^[0-9]$/.test(e.key)) {
+          setPinInput((prev) => {
+            const next = prev + e.key;
+            pinInputRef.current = next;
+            return next;
+          });
+        } else if (e.key === 'Backspace') {
+          setPinInput((prev) => {
+            const next = prev.slice(0, -1);
+            pinInputRef.current = next;
+            return next;
+          });
+        }
+        return;
+      }
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      if (e.key === '2' || (e.altKey && e.key === '2') || e.key === 't') {
+        setActiveTab('transactions');
+      } else if (e.key === '1' || (e.altKey && e.key === '1') || e.key === 'd') {
+        setActiveTab('dashboard');
+      } else if (e.key === 'l' || (e.altKey && e.key === 'l')) {
+        handleLock();
+      }
+    };
+
     window.addEventListener('mousemove', recordActivity, { passive: true });
-    window.addEventListener('keydown', recordActivity, { passive: true });
+    window.addEventListener('keydown', handleKeyDown, { passive: true });
     window.addEventListener('click', recordActivity, { passive: true });
 
     // Auto-lock interval (checks every 30s; locks if inactive > 15m)
@@ -66,7 +99,7 @@ export const App: React.FC = () => {
     return () => {
       mounted = false;
       window.removeEventListener('mousemove', recordActivity);
-      window.removeEventListener('keydown', recordActivity);
+      window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('click', recordActivity);
       clearInterval(interval);
     };
@@ -79,14 +112,14 @@ export const App: React.FC = () => {
     setLockError(false);
   };
 
-  const handleUnlock = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!pinInput) return;
+  const doUnlock = async () => {
+    const pin = pinInputRef.current;
+    if (!pin) return;
     setIsAuthenticating(true);
     setLockError(false);
 
     try {
-      const success = await api.unlockSession(pinInput);
+      const success = await api.unlockSession(pin);
       if (success) {
         setIsLocked(false);
         setPinInput('');
@@ -100,6 +133,11 @@ export const App: React.FC = () => {
     } finally {
       setIsAuthenticating(false);
     }
+  };
+
+  const handleUnlock = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await doUnlock();
   };
 
   if (isLocked) {

@@ -76,9 +76,19 @@ class QMPClient:
         log(f"  [SCREENSHOT FAILED] {os.path.basename(filename_png)}")
         return False
 
-    def send_keys(self, keys):
-        key_list = [{"type": "qcode", "data": k} for k in keys]
-        self.cmd("send-key", {"keys": key_list})
+    def send_keys(self, keys, delay=0.15):
+        for k in keys:
+            self.cmd("send-key", {"keys": [{"type": "qcode", "data": k}]})
+            time.sleep(delay)
+
+    def click_screen(self):
+        self.cmd("input-send-event", {
+            "events": [
+                {"type": "btn", "data": {"down": True, "button": "left"}},
+                {"type": "btn", "data": {"down": False, "button": "left"}}
+            ]
+        })
+        time.sleep(0.2)
 
     def close(self):
         if self.sock:
@@ -159,6 +169,8 @@ def main():
         "-smp", "2",
         "-drive", f"if=pflash,format=raw,readonly=on,file={OVMF_PATH}",
         "-drive", f"file={disk_img},format=raw,if=virtio",
+        "-device", "virtio-keyboard-pci",
+        "-device", "virtio-tablet-pci",
         "-vga", "virtio",
         "-display", "vnc=127.0.0.1:42",
         "-qmp", f"unix:{QMP_SOCK},server,nowait",
@@ -245,6 +257,15 @@ def main():
         rc, desktop_journal = exec_in_guest(child, "journalctl -u bhoot-desktop.service --no-pager -n 30")
         log(f"bhoot-desktop journal (rc={rc}):\n{desktop_journal}")
 
+        rc, seatd_status = exec_in_guest(child, "systemctl status seatd.service --no-pager")
+        log(f"seatd status (rc={rc}):\n{seatd_status}")
+
+        rc, seatd_journal = exec_in_guest(child, "journalctl -u seatd.service --no-pager -n 20")
+        log(f"seatd journal (rc={rc}):\n{seatd_journal}")
+
+        rc, input_devices = exec_in_guest(child, "cat /proc/bus/input/devices")
+        log(f"input devices (rc={rc}):\n{input_devices}")
+
         # Check processes
         rc, ps_out = exec_in_guest(child, "ps -ef")
         log(f"Processes in guest (rc={rc}):\n{ps_out}")
@@ -256,21 +277,25 @@ def main():
             raise RuntimeError(f"Health check failed: {health}")
 
         # Stage 5: In-Browser GUI Lock Screen Verification
-        time.sleep(3)
+        time.sleep(5)
         log("Capturing BHOOT financial lock screen rendered in browser...")
         qmp.screendump(os.path.join(SCREENSHOT_DIR, "04_bhoot_lock_screen.png"))
 
         # Stage 6: Unlock Graphical UI via QMP Key Events (PIN: 1234 + Enter)
-        log("Submitting PIN '1234' and Enter to kiosk browser via QMP...")
-        qmp.send_keys(['1', '2', '3', '4', 'ret'])
-        time.sleep(4)
+        log("Activating kiosk focus and submitting PIN '1234' and Enter to kiosk browser via QMP...")
+        qmp.click_screen()
+        time.sleep(0.5)
+        qmp.send_keys(['1', '2', '3', '4', 'ret'], delay=0.25)
+        time.sleep(5)
         log("Capturing Dashboard view screenshot...")
         qmp.screendump(os.path.join(SCREENSHOT_DIR, "05_dashboard_view.png"))
 
-        # Stage 7: Navigate to Transactions View via Keyboard
-        log("Navigating to Transactions view via QMP key navigation...")
-        qmp.send_keys(['tab', 'tab', 'ret'])
-        time.sleep(4)
+        # Stage 7: Navigate to Transactions View via Keyboard Shortcut ('2')
+        log("Navigating to Transactions view via QMP key event ('2')...")
+        qmp.click_screen()
+        time.sleep(0.5)
+        qmp.send_keys(['2'], delay=0.25)
+        time.sleep(5)
         log("Capturing Transactions view screenshot...")
         qmp.screendump(os.path.join(SCREENSHOT_DIR, "06_transactions_view.png"))
 
@@ -353,8 +378,37 @@ def main():
         assert "bhoot.db" in db_file, f"Test 7 FAILED: Database file not found:\n{db_file}"
         log("  [PASS] Test 7: SQLCipher persistent database verified on LUKS persistent volume")
 
+        # 8. Token Revocation on Session Lock
+        log("Testing session lock and token revocation...")
+        rc, out8 = exec_in_guest(child, f"curl -i -s -X POST http://127.0.0.1:1420/api/auth/lock -H 'Authorization: Bearer {token}' | head -n 5")
+        log(f"Test 8 - Session Lock Response (rc={rc}):\n{out8}")
+        assert "200" in out8, f"Test 8 FAILED: Expected 200 OK on lock, got:\n{out8}"
+        rc, out8_verify = exec_in_guest(child, f"curl -i -s http://127.0.0.1:1420/api/accounts -H 'Authorization: Bearer {token}' | head -n 5")
+        log(f"Test 8 - Revoked Token Access Attempt (rc={rc}):\n{out8_verify}")
+        assert "401" in out8_verify, f"Test 8 FAILED: Expected 401 Unauthorized with revoked token, got:\n{out8_verify}"
+        log("  [PASS] Test 8: Session lock strictly revokes token; unauthorized access blocked (401)")
+
+        # 9. Re-authentication & Fresh Token Generation
+        rc, unlock2 = exec_in_guest(child, "curl -s -X POST http://127.0.0.1:1420/api/auth/unlock -H 'Content-Type: application/json' -d '{\"pin\":\"1234\"}'")
+        m_tok2 = re.search(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', unlock2)
+        assert m_tok2 and m_tok2.group(0) != token, f"Test 9 FAILED: Token rotation failed: {unlock2}"
+        token2 = m_tok2.group(0)
+        log(f"  [PASS] Test 9: Re-authenticated with rotated session token: {token2}")
+
+        # 10. Database Encryption Verification (Ciphertext Check)
+        rc, db_header = exec_in_guest(child, "head -c 16 /var/bhoot/data/bhoot.db | od -A n -t x1")
+        log(f"Test 10 - Database 16-byte Header (rc={rc}): {db_header}")
+        assert "53 51 4c 69 74 65" not in db_header, f"Test 10 FAILED: Database header contains plaintext SQLite signature!"
+        log("  [PASS] Test 10: SQLCipher database is fully encrypted (zero plaintext SQLite magic)")
+
+        # 11. Encrypted Backup Restore Verification in Sandbox
+        rc, restore_out = exec_in_guest(child, f"curl -i -s -X POST http://127.0.0.1:1420/api/backup/restore -H 'Content-Type: application/json' -H 'Authorization: Bearer {token2}' -d '{{\"passphrase\":\"AuditBackupPass2026!\",\"backup_file_path\":\"/var/bhoot/data/audit_backup.bhoot\"}}' | head -n 5")
+        log(f"Test 11 - Backup Restore Response (rc={rc}):\n{restore_out}")
+        assert "200" in restore_out, f"Test 11 FAILED: Expected 200 OK on restore, got:\n{restore_out}"
+        log("  [PASS] Test 11: Encrypted backup restored and verified successfully")
+
         log("====================================================================")
-        log(" [TASK 5 COMPLETE] All 7 in-guest regression tests PASSED 100%.")
+        log(" [TASK 5 COMPLETE] All 11 in-guest regression tests PASSED 100%.")
         log("====================================================================")
 
         # Clean shutdown
