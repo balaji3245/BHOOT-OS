@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tiny_http::Server;
@@ -63,14 +63,22 @@ fn run_self_test() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Helper closure to make raw HTTP requests
-    let http_request = |method: &str, path: &str, body: Option<&str>| -> Result<(u16, String), Box<dyn std::error::Error>> {
+    // Helper closure to make raw HTTP requests with active session token
+    let active_token = Arc::new(Mutex::new(None::<String>));
+    let active_token_clone = active_token.clone();
+
+    let http_request = move |method: &str, path: &str, body: Option<&str>| -> Result<(u16, String), Box<dyn std::error::Error>> {
         let mut stream = TcpStream::connect(format!("127.0.0.1:{port}"))?;
         stream.set_read_timeout(Some(Duration::from_secs(4)))?;
 
         let body_str = body.unwrap_or("");
+        let auth_hdr = match active_token_clone.lock().unwrap().as_ref() {
+            Some(tok) => format!("Authorization: Bearer {tok}\r\n"),
+            None => String::new(),
+        };
+
         let req = format!(
-            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body_str}",
+            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{auth_hdr}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body_str}",
             body_str.len()
         );
         stream.write_all(req.as_bytes())?;
@@ -117,6 +125,18 @@ fn run_self_test() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(status, 200);
     assert!(resp.contains(r#""airgap":true"#));
     println!("  -> PASS (/api/health verified)");
+
+    // Verify rejection while session is locked
+    let (lock_status, _) = http_request("GET", "/api/accounts", None)?;
+    assert_eq!(lock_status, 401, "Protected route MUST be rejected when session is locked");
+
+    // Authenticate and unlock session with PIN
+    let (status, unlock_resp) = http_request("POST", "/api/auth/unlock", Some(r#"{"pin":"1234"}"#))?;
+    assert_eq!(status, 200, "PIN unlock should return 200 OK");
+    let resp_body = unlock_resp.lines().last().unwrap_or("{}");
+    let unlock_json: serde_json::Value = serde_json::from_str(resp_body)?;
+    let token = unlock_json["session_token"].as_str().ok_or("Missing token in unlock response")?;
+    *active_token.lock().unwrap() = Some(token.to_string());
 
     // 7. Test /api/accounts (GET)
     println!("[TEST 5/15] Checking GET /api/accounts...");
@@ -195,6 +215,10 @@ fn run_self_test() -> Result<(), Box<dyn std::error::Error>> {
     let (status, resp) = http_request("POST", "/api/auth/unlock", Some(r#"{"pin":"1234"}"#))?;
     assert_eq!(status, 200, "Correct PIN must return 200 OK");
     assert!(resp.contains("session_token"));
+    let resp_body = resp.lines().last().unwrap_or("{}");
+    let unlock_json: serde_json::Value = serde_json::from_str(resp_body)?;
+    let new_token = unlock_json["session_token"].as_str().ok_or("Missing token in unlock response")?;
+    *active_token.lock().unwrap() = Some(new_token.to_string());
     println!("  -> PASS (Argon2id PIN authentication verified)");
 
     // 15. Test Vault Verification

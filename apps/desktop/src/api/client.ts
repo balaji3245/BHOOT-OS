@@ -173,7 +173,17 @@ export const api = {
     const bs = await this.getBalanceSheet();
     const allItems = [...bs.assets, ...bs.liabilities, ...bs.equity];
     const item = allItems.find((i) => i.account_id === accountId);
-    return item ? item.balance_paisa : 0;
+    if (item) return item.balance_paisa ?? 0;
+    // Check income statement for Income / Expense accounts
+    try {
+      const is = await this.getIncomeStatement();
+      const incExp = [...is.operating_income, ...is.operating_expenses];
+      const ieItem = incExp.find((i) => i.account_id === accountId);
+      if (ieItem) return ieItem.balance_paisa ?? 0;
+    } catch {
+      // ignore
+    }
+    return 0;
   },
 
   // Double-Entry Transactions

@@ -6,6 +6,7 @@ pub mod schema;
 pub use config::SqlCipherConfig;
 pub use database::{Database, TradingSummary, VaultDocumentSummary};
 pub use error::DbError;
+pub use rusqlite;
 pub use schema::{MIGRATION_001_SQL, MIGRATION_002_SQL};
 
 #[cfg(test)]

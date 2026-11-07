@@ -1294,13 +1294,8 @@ impl Database {
             }
         }
 
-        // Incorporate realized trading net P&L up to as_of into retained earnings
-        let trading_summary = self.get_trading_summary(None)?;
-        let trading_net = Money::from_paisa(trading_summary.net_pnl_paisa);
-
-        let retained_earnings = total_income
-            .checked_add(trading_net)?
-            .checked_sub(total_expense)?;
+        // Retained earnings from cumulative double-entry operating ledger
+        let retained_earnings = total_income.checked_sub(total_expense)?;
 
         let sheet = BalanceSheet::new(as_of, assets, liabilities, equity, retained_earnings)?;
         Ok(sheet)

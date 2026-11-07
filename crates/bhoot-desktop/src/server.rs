@@ -53,6 +53,34 @@ impl Default for AppSettings {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthError {
+    InvalidCredentials,
+    LockedOut(i64),
+}
+
+impl std::fmt::Display for AuthError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidCredentials => write!(f, "Invalid PIN credentials"),
+            Self::LockedOut(secs) => write!(f, "Rate limit exceeded: PIN verification locked for {secs} seconds"),
+        }
+    }
+}
+
+impl std::error::Error for AuthError {}
+
+pub fn constant_time_eq_slices(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut res = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        res |= x ^ y;
+    }
+    res == 0
+}
+
 #[derive(Debug)]
 pub struct ServerState {
     pub db: Mutex<Database>,
@@ -64,6 +92,8 @@ pub struct ServerState {
     pub pin_derived_key: Mutex<[u8; 32]>,
     pub session_token: Mutex<String>,
     pub failed_pin_attempts: AtomicU32,
+    pub locked_until_unix: std::sync::atomic::AtomicI64,
+    pub pin_mutex: Mutex<()>,
     pub settings: Mutex<AppSettings>,
 }
 
@@ -80,6 +110,37 @@ impl ServerState {
 
         let initial_token = Uuid::new_v4().to_string();
 
+        let conn = db.connection();
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS pin_lockout_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                failed_attempts INTEGER NOT NULL,
+                locked_until_unix INTEGER NOT NULL
+            );",
+            [],
+        );
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO pin_lockout_state (id, failed_attempts, locked_until_unix) VALUES (1, 0, 0);",
+            [],
+        );
+
+        let mut failed_attempts = 0u32;
+        let mut locked_until_unix = 0i64;
+        let now_unix = Utc::now().timestamp();
+
+        if let Ok(mut stmt) = conn.prepare("SELECT failed_attempts, locked_until_unix FROM pin_lockout_state WHERE id = 1") {
+            if let Ok(row) = stmt.query_row([], |r| {
+                let fails: u32 = r.get(0)?;
+                let lock_until: i64 = r.get(1)?;
+                Ok((fails, lock_until))
+            }) {
+                if row.1 > now_unix {
+                    failed_attempts = row.0;
+                    locked_until_unix = row.1;
+                }
+            }
+        }
+
         Self {
             db: Mutex::new(db),
             db_path,
@@ -89,41 +150,78 @@ impl ServerState {
             pin_salt,
             pin_derived_key: Mutex::new(*derived),
             session_token: Mutex::new(initial_token),
-            failed_pin_attempts: AtomicU32::new(0),
+            failed_pin_attempts: AtomicU32::new(failed_attempts),
+            locked_until_unix: std::sync::atomic::AtomicI64::new(locked_until_unix),
+            pin_mutex: Mutex::new(()),
             settings: Mutex::new(AppSettings::default()),
         }
     }
 
-    pub fn verify_pin(&self, pin: &str) -> bool {
+    pub fn verify_pin(&self, pin: &str) -> Result<String, AuthError> {
+        let _lock = self.pin_mutex.lock().unwrap();
+        let now_unix = Utc::now().timestamp();
+        let locked_until = self.locked_until_unix.load(Ordering::SeqCst);
+
+        if now_unix < locked_until {
+            let remaining = locked_until - now_unix;
+            return Err(AuthError::LockedOut(remaining.max(1)));
+        }
+
         let params = Argon2idParams {
             m_cost: 16384,
             t_cost: 2,
             p_cost: 1,
         };
+
         if let Ok(derived) = derive_master_key(pin.as_bytes(), &self.pin_salt, params) {
             let expected = self.pin_derived_key.lock().unwrap();
             let matches = constant_time_eq_32(&derived, &expected);
+            drop(expected);
+
             if matches {
                 self.failed_pin_attempts.store(0, Ordering::SeqCst);
+                self.locked_until_unix.store(0, Ordering::SeqCst);
                 self.session_locked.store(false, Ordering::SeqCst);
-                let mut token = self.session_token.lock().unwrap();
-                *token = Uuid::new_v4().to_string();
-                true
+                let new_token = Uuid::new_v4().to_string();
+                let mut token_lock = self.session_token.lock().unwrap();
+                *token_lock = new_token.clone();
+                drop(token_lock);
+
+                let db = self.db.lock().unwrap();
+                let _ = db.connection().execute(
+                    "UPDATE pin_lockout_state SET failed_attempts = 0, locked_until_unix = 0 WHERE id = 1;",
+                    [],
+                );
+
+                Ok(new_token)
             } else {
-                self.failed_pin_attempts.fetch_add(1, Ordering::SeqCst);
-                false
+                let fails = self.failed_pin_attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                let db = self.db.lock().unwrap();
+                if fails >= 5 {
+                    let lock_until = now_unix + 60;
+                    self.locked_until_unix.store(lock_until, Ordering::SeqCst);
+                    let _ = db.connection().execute(
+                        "UPDATE pin_lockout_state SET failed_attempts = ?1, locked_until_unix = ?2 WHERE id = 1;",
+                        bhoot_db::rusqlite::params![fails, lock_until],
+                    );
+                    Err(AuthError::LockedOut(60))
+                } else {
+                    let _ = db.connection().execute(
+                        "UPDATE pin_lockout_state SET failed_attempts = ?1, locked_until_unix = 0 WHERE id = 1;",
+                        bhoot_db::rusqlite::params![fails],
+                    );
+                    Err(AuthError::InvalidCredentials)
+                }
             }
         } else {
-            false
+            Err(AuthError::InvalidCredentials)
         }
     }
 
-    pub fn set_pin(&self, current_pin: &str, new_pin: &str) -> Result<(), &'static str> {
-        if !self.verify_pin(current_pin) {
-            return Err("Current PIN is incorrect");
-        }
+    pub fn set_pin(&self, current_pin: &str, new_pin: &str) -> Result<(), AuthError> {
+        self.verify_pin(current_pin)?;
         if new_pin.len() < 4 {
-            return Err("New PIN must be at least 4 characters");
+            return Err(AuthError::InvalidCredentials);
         }
         let params = Argon2idParams {
             m_cost: 16384,
@@ -131,7 +229,7 @@ impl ServerState {
             p_cost: 1,
         };
         let derived = derive_master_key(new_pin.as_bytes(), &self.pin_salt, params)
-            .map_err(|_| "Failed deriving key for new PIN")?;
+            .map_err(|_| AuthError::InvalidCredentials)?;
         let mut key = self.pin_derived_key.lock().unwrap();
         *key = *derived;
         Ok(())
@@ -663,6 +761,61 @@ pub fn handle_request(mut request: Request, state: &ServerState) {
         None
     };
 
+    // Extract Authorization or X-Session-Token header
+    let mut auth_token = None;
+    for header in request.headers() {
+        if header.field.equiv("Authorization") {
+            let val = header.value.as_str();
+            if let Some(token) = val.strip_prefix("Bearer ") {
+                auth_token = Some(token.trim().to_string());
+            } else {
+                auth_token = Some(val.trim().to_string());
+            }
+        } else if header.field.equiv("X-Session-Token") {
+            auth_token = Some(header.value.as_str().trim().to_string());
+        }
+    }
+
+    // Public endpoints that do not require an active authenticated session
+    let is_public = path == "/"
+        || path == "/index.html"
+        || path.starts_with("/assets/")
+        || path.ends_with(".css")
+        || path.ends_with(".js")
+        || path == "/api/health"
+        || path == "/api/security/status"
+        || path == "/api/auth/unlock";
+
+    if !is_public {
+        // Enforce Session Lock Guard: Reject all requests when session is locked
+        if state.session_locked.load(Ordering::SeqCst) {
+            let mut resp = Response::from_string(r#"{"error":"Unauthorized: Application session is locked"}"#)
+                .with_status_code(StatusCode(401));
+            resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+            resp.add_header(csp_header);
+            resp.add_header(frame_header);
+            let _ = request.respond(resp);
+            return;
+        }
+
+        // Enforce Session Token Authentication: Reject missing, invalid, or revoked tokens
+        let current_valid_token = state.session_token.lock().unwrap().clone();
+        let is_valid = match &auth_token {
+            Some(t) => constant_time_eq_slices(t.as_bytes(), current_valid_token.as_bytes()),
+            None => false,
+        };
+
+        if !is_valid {
+            let mut resp = Response::from_string(r#"{"error":"Unauthorized: Missing or invalid session token"}"#)
+                .with_status_code(StatusCode(401));
+            resp.add_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+            resp.add_header(csp_header);
+            resp.add_header(frame_header);
+            let _ = request.respond(resp);
+            return;
+        }
+    }
+
     // API Routing
     let (status, content_type, response_body) = match (method.as_str(), path) {
         // --- 1. System Health & Security ---
@@ -691,14 +844,23 @@ pub fn handle_request(mut request: Request, state: &ServerState) {
         // --- 2. Authentication & Session ---
         ("POST", "/api/auth/unlock") => match read_body(&mut request, MAX_JSON_PAYLOAD_BYTES) {
             Ok(body) => match serde_json::from_slice::<UnlockRequest>(&body) {
-                Ok(req) => {
-                    if state.verify_pin(&req.pin) {
-                        let token = state.session_token.lock().unwrap().clone();
-                        (StatusCode(200), "application/json", format!(r#"{{"success":true,"session_token":"{token}"}}"#))
-                    } else {
-                        (StatusCode(401), "application/json", r#"{"error":"Invalid PIN credentials"}"#.to_string())
-                    }
-                }
+                Ok(req) => match state.verify_pin(&req.pin) {
+                    Ok(token) => (
+                        StatusCode(200),
+                        "application/json",
+                        format!(r#"{{"success":true,"session_token":"{token}"}}"#),
+                    ),
+                    Err(AuthError::LockedOut(secs)) => (
+                        StatusCode(429),
+                        "application/json",
+                        format!(r#"{{"error":"Rate limit exceeded: PIN verification locked for {secs} seconds"}}"#),
+                    ),
+                    Err(AuthError::InvalidCredentials) => (
+                        StatusCode(401),
+                        "application/json",
+                        r#"{"error":"Invalid PIN credentials"}"#.to_string(),
+                    ),
+                },
                 Err(_) => (StatusCode(400), "application/json", r#"{"error":"Malformed JSON"}"#.to_string()),
             },
             Err((s, b)) => (s, "application/json", b),
@@ -706,6 +868,8 @@ pub fn handle_request(mut request: Request, state: &ServerState) {
 
         ("POST", "/api/auth/lock") => {
             state.session_locked.store(true, Ordering::SeqCst);
+            // Immediately invalidate previous session token so it cannot be reused
+            *state.session_token.lock().unwrap() = Uuid::new_v4().to_string();
             (StatusCode(200), "application/json", r#"{"success":true,"session_locked":true}"#.to_string())
         }
 
@@ -713,7 +877,16 @@ pub fn handle_request(mut request: Request, state: &ServerState) {
             Ok(body) => match serde_json::from_slice::<SetPinRequest>(&body) {
                 Ok(req) => match state.set_pin(&req.current_pin, &req.new_pin) {
                     Ok(_) => (StatusCode(200), "application/json", r#"{"success":true}"#.to_string()),
-                    Err(e) => (StatusCode(400), "application/json", format!(r#"{{"error":"{e}"}}"#)),
+                    Err(AuthError::LockedOut(secs)) => (
+                        StatusCode(429),
+                        "application/json",
+                        format!(r#"{{"error":"Rate limit exceeded: PIN verification locked for {secs} seconds"}}"#),
+                    ),
+                    Err(AuthError::InvalidCredentials) => (
+                        StatusCode(401),
+                        "application/json",
+                        r#"{"error":"Current PIN is incorrect"}"#.to_string(),
+                    ),
                 },
                 Err(_) => (StatusCode(400), "application/json", r#"{"error":"Malformed JSON"}"#.to_string()),
             },

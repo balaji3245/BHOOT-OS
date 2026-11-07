@@ -10,6 +10,7 @@ pub struct AccountSummaryItem {
     pub account_id: AccountId,
     pub name: String,
     pub subtype: AccountSubtype,
+    #[serde(rename = "balance_paisa", alias = "balance")]
     pub balance: Money,
 }
 
@@ -18,12 +19,17 @@ pub struct AccountSummaryItem {
 pub struct BalanceSheet {
     pub as_of: DateTime<Utc>,
     pub assets: Vec<AccountSummaryItem>,
+    #[serde(rename = "total_assets_paisa", alias = "total_assets")]
     pub total_assets: Money,
     pub liabilities: Vec<AccountSummaryItem>,
+    #[serde(rename = "total_liabilities_paisa", alias = "total_liabilities")]
     pub total_liabilities: Money,
     pub equity: Vec<AccountSummaryItem>,
+    #[serde(rename = "total_equity_paisa", alias = "total_equity")]
     pub total_equity: Money,
+    #[serde(rename = "retained_earnings_paisa", alias = "retained_earnings")]
     pub retained_earnings: Money,
+    #[serde(rename = "net_worth_paisa", alias = "net_worth")]
     pub net_worth: Money,
     pub is_balanced: bool,
 }
@@ -85,13 +91,20 @@ pub struct IncomeStatement {
     pub from: DateTime<Utc>,
     pub to: DateTime<Utc>,
     pub operating_income: Vec<AccountSummaryItem>,
+    #[serde(rename = "total_operating_income_paisa", alias = "total_operating_income")]
     pub total_operating_income: Money,
+    #[serde(rename = "trading_gross_pnl_paisa", alias = "trading_gross_pnl")]
     pub trading_gross_pnl: Money,
+    #[serde(rename = "trading_charges_paisa", alias = "trading_charges")]
     pub trading_charges: Money,
+    #[serde(rename = "trading_net_pnl_paisa", alias = "trading_net_pnl")]
     pub trading_net_pnl: Money,
+    #[serde(rename = "total_income_paisa", alias = "total_income")]
     pub total_income: Money,
     pub operating_expenses: Vec<AccountSummaryItem>,
+    #[serde(rename = "total_operating_expenses_paisa", alias = "total_operating_expenses")]
     pub total_operating_expenses: Money,
+    #[serde(rename = "net_profit_paisa", alias = "net_profit")]
     pub net_profit: Money,
 }
 
@@ -144,11 +157,17 @@ impl IncomeStatement {
 pub struct CashFlowStatement {
     pub from: DateTime<Utc>,
     pub to: DateTime<Utc>,
+    #[serde(rename = "operating_cash_flow_paisa", alias = "operating_cash_flow")]
     pub operating_cash_flow: Money,
+    #[serde(rename = "investing_cash_flow_paisa", alias = "investing_cash_flow")]
     pub investing_cash_flow: Money,
+    #[serde(rename = "financing_cash_flow_paisa", alias = "financing_cash_flow")]
     pub financing_cash_flow: Money,
+    #[serde(rename = "net_cash_flow_paisa", alias = "net_cash_flow")]
     pub net_cash_flow: Money,
+    #[serde(rename = "beginning_cash_paisa", alias = "beginning_cash")]
     pub beginning_cash: Money,
+    #[serde(rename = "ending_cash_paisa", alias = "ending_cash")]
     pub ending_cash: Money,
 }
 
