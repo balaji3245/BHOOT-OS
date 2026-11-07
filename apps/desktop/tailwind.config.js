@@ -9,11 +9,21 @@ export default {
     extend: {
       colors: {
         bhoot: {
-          dark: '#0a0d14',
-          card: '#111726',
-          border: '#1e293b',
-          accent: '#10b981', // emerald green for offline finance
-          gold: '#f59e0b',
+          bg: '#050505',
+          sidebar: '#000000',
+          card: '#111111',
+          cardHover: '#161616',
+          border: '#222222',
+          borderSubtle: '#1a1a1a',
+          text: '#ffffff',
+          textMuted: '#888888',
+          textDim: '#555555',
+          accent: '#ffffff',
+          // Semantic statuses
+          danger: '#ef4444',
+          warning: '#f59e0b',
+          success: '#10b981',
+          info: '#3b82f6',
         }
       }
     },

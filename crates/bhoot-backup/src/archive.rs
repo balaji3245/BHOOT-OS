@@ -182,19 +182,253 @@ pub fn inspect_backup_manifest(
     })
 }
 
-/// Disambiguation check to ensure backup target does not target system block devices or prohibited root paths.
-pub fn validate_destination_path(destination: &Path) -> Result<(), BackupError> {
-    let dest_str = destination.to_string_lossy();
+/// Normalize path eliminating '.', '..' and redundant separators without requiring path existence.
+pub fn normalize_path(path: &Path) -> std::path::PathBuf {
+    let mut normalized = std::path::PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::Prefix(p) => normalized.push(p.as_os_str()),
+            std::path::Component::RootDir => normalized.push(std::path::MAIN_SEPARATOR.to_string()),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::Normal(c) => normalized.push(c),
+        }
+    }
+    normalized
+}
 
-    if dest_str.starts_with("/dev")
-        || dest_str.starts_with("/sys")
-        || dest_str.starts_with("/proc")
-        || dest_str.starts_with("/boot")
-    {
+/// Disambiguation check to ensure backup target does not target system block devices or prohibited root paths.
+/// Strictly normalizes relative path traversals and validates canonical ancestors.
+pub fn validate_destination_path(destination: &Path) -> Result<(), BackupError> {
+    let normalized = normalize_path(destination);
+    let dest_str = normalized.to_string_lossy();
+
+    let prohibited_prefixes = [
+        "/dev", "/sys", "/proc", "/boot", "/etc", "/usr", "/bin", "/sbin", "/lib", "/root",
+    ];
+
+    for prefix in &prohibited_prefixes {
+        if dest_str == *prefix
+            || dest_str.starts_with(&format!("{prefix}/"))
+            || dest_str.contains(&format!("{prefix}/"))
+        {
+            return Err(BackupError::ProhibitedDestination(dest_str.to_string()));
+        }
+    }
+
+    if dest_str == "/" || dest_str.is_empty() {
         return Err(BackupError::ProhibitedDestination(dest_str.to_string()));
     }
 
+    // Also check canonicalized path if file or parent directory exists
+    if let Ok(canon) = destination.canonicalize() {
+        let canon_str = canon.to_string_lossy();
+        for prefix in &prohibited_prefixes {
+            if canon_str == *prefix || canon_str.starts_with(&format!("{prefix}/")) {
+                return Err(BackupError::ProhibitedDestination(canon_str.to_string()));
+            }
+        }
+    } else if let Some(parent) = destination.parent() {
+        if let Ok(canon_parent) = parent.canonicalize() {
+            let canon_str = canon_parent.to_string_lossy();
+            for prefix in &prohibited_prefixes {
+                if canon_str == *prefix || canon_str.starts_with(&format!("{prefix}/")) {
+                    return Err(BackupError::ProhibitedDestination(canon_str.to_string()));
+                }
+            }
+        }
+    }
+
     Ok(())
+}
+
+/// Structured multi-file bundle payload encapsulating database and document vault payloads.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupArchiveBundle {
+    pub magic: String,
+    pub version: u32,
+    pub created_at: DateTime<Utc>,
+    pub db_bytes: Vec<u8>,
+    pub vault_files: Vec<(String, Vec<u8>)>,
+}
+
+/// Create a comprehensive encrypted backup archive file on disk containing both the database
+/// (post-WAL checkpoint) and any encrypted vault files. Uses atomic write via a temp file.
+pub fn create_full_backup_file(
+    db_file_path: &Path,
+    vault_dir: Option<&Path>,
+    output_backup_path: &Path,
+    passphrase: &str,
+) -> Result<usize, BackupError> {
+    validate_destination_path(output_backup_path)?;
+
+    let db_bytes = fs::read(db_file_path)
+        .map_err(|e| BackupError::IoError(format!("Failed to read database file: {e}")))?;
+
+    let mut vault_files = Vec::new();
+    if let Some(v_dir) = vault_dir {
+        if v_dir.exists() && v_dir.is_dir() {
+            if let Ok(entries) = fs::read_dir(v_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                            if let Ok(data) = fs::read(&path) {
+                                vault_files.push((file_name.to_string(), data));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let bundle = BackupArchiveBundle {
+        magic: "BHOOT_BUNDLE_V1".to_string(),
+        version: 1,
+        created_at: Utc::now(),
+        db_bytes,
+        vault_files,
+    };
+
+    let bundle_bytes = serde_json::to_vec(&bundle)
+        .map_err(|e| BackupError::IoError(format!("Failed to serialize backup bundle: {e}")))?;
+
+    let archive_bytes = create_encrypted_backup(&bundle_bytes, passphrase)?;
+
+    // Atomic write to temporary file in same directory then rename
+    let parent = output_backup_path.parent().unwrap_or_else(|| Path::new("."));
+    let temp_path = parent.join(format!(".tmp_backup_{}", uuid::Uuid::new_v4()));
+
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+
+    let mut file = options
+        .open(&temp_path)
+        .map_err(|e| BackupError::IoError(format!("Failed to create temp backup file: {e}")))?;
+
+    file.write_all(&archive_bytes)
+        .map_err(|e| BackupError::IoError(format!("Failed to write backup file: {e}")))?;
+
+    file.sync_all()
+        .map_err(|e| BackupError::IoError(format!("Failed to sync backup file: {e}")))?;
+
+    fs::rename(&temp_path, output_backup_path)
+        .map_err(|e| BackupError::IoError(format!("Failed to rename temp backup to destination: {e}")))?;
+
+    Ok(archive_bytes.len())
+}
+
+/// Restore a full encrypted backup archive file, extracting the SQLCipher database and
+/// restoring all document vault artifacts to their target directories.
+pub fn restore_full_backup_file(
+    backup_file_path: &Path,
+    output_db_path: &Path,
+    output_vault_dir: Option<&Path>,
+    passphrase: &str,
+) -> Result<usize, BackupError> {
+    validate_destination_path(output_db_path)?;
+    if let Some(v_dir) = output_vault_dir {
+        validate_destination_path(v_dir)?;
+    }
+
+    let mut file = fs::File::open(backup_file_path)
+        .map_err(|e| BackupError::IoError(format!("Failed to open backup file: {e}")))?;
+
+    let mut archive_bytes = Vec::new();
+    file.read_to_end(&mut archive_bytes)
+        .map_err(|e| BackupError::IoError(format!("Failed to read backup file: {e}")))?;
+
+    let plaintext = restore_encrypted_backup(&archive_bytes, passphrase)?;
+
+    // Check if plaintext is a structured bundle or raw db bytes
+    if let Ok(bundle) = serde_json::from_slice::<BackupArchiveBundle>(&plaintext) {
+        if bundle.magic == "BHOOT_BUNDLE_V1" {
+            // Restore database file atomically
+            let parent = output_db_path.parent().unwrap_or_else(|| Path::new("."));
+            let temp_db_path = parent.join(format!(".tmp_restore_{}", uuid::Uuid::new_v4()));
+
+            let mut options = OpenOptions::new();
+            options.write(true).create(true).truncate(true);
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+
+            let mut out_file = options
+                .open(&temp_db_path)
+                .map_err(|e| BackupError::IoError(format!("Failed to create restored DB: {e}")))?;
+
+            out_file
+                .write_all(&bundle.db_bytes)
+                .map_err(|e| BackupError::IoError(format!("Failed to write restored DB: {e}")))?;
+
+            out_file
+                .sync_all()
+                .map_err(|e| BackupError::IoError(format!("Failed to sync restored DB: {e}")))?;
+
+            fs::rename(&temp_db_path, output_db_path)
+                .map_err(|e| BackupError::IoError(format!("Failed to rename restored DB: {e}")))?;
+
+            // Restore vault files if directory provided
+            if let Some(v_dir) = output_vault_dir {
+                fs::create_dir_all(v_dir)
+                    .map_err(|e| BackupError::IoError(format!("Failed to create vault dir: {e}")))?;
+
+                for (name, data) in &bundle.vault_files {
+                    let sanitized_name = Path::new(name).file_name().unwrap_or_default();
+                    let target_path = v_dir.join(sanitized_name);
+                    let mut v_options = OpenOptions::new();
+                    v_options.write(true).create(true).truncate(true);
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::OpenOptionsExt;
+                        v_options.mode(0o600);
+                    }
+                    if let Ok(mut v_file) = v_options.open(&target_path) {
+                        let _ = v_file.write_all(data);
+                        let _ = v_file.sync_all();
+                    }
+                }
+            }
+
+            return Ok(bundle.db_bytes.len());
+        }
+    }
+
+    // Fallback: Legacy raw database restore
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+
+    let mut out_file = options
+        .open(output_db_path)
+        .map_err(|e| BackupError::IoError(format!("Failed to create restored DB: {e}")))?;
+
+    out_file
+        .write_all(&plaintext)
+        .map_err(|e| BackupError::IoError(format!("Failed to write restored DB: {e}")))?;
+
+    out_file
+        .sync_all()
+        .map_err(|e| BackupError::IoError(format!("Failed to sync restored DB: {e}")))?;
+
+    Ok(plaintext.len())
 }
 
 /// Create an encrypted backup archive file on disk with strict file permissions (0o600).

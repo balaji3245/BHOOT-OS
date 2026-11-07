@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 /// SQLCipher security and performance configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,9 +36,9 @@ impl SqlCipherConfig {
     /// via `sqlite3_key(db, ptr, 32)` to eliminate heap residue of hex keys.
     #[must_use]
     pub fn generate_pragmas(&self, raw_key_32: &[u8; 32]) -> Vec<String> {
-        let hex_key: String = raw_key_32.iter().map(|b| format!("{b:02x}")).collect();
+        let hex_key = Zeroizing::new(raw_key_32.iter().map(|b| format!("{b:02x}")).collect::<String>());
         vec![
-            format!("PRAGMA key = \"x'{hex_key}'\";"),
+            format!("PRAGMA key = \"x'{}'\";", hex_key.as_str()),
             format!("PRAGMA cipher_page_size = {};", self.cipher_page_size),
             format!("PRAGMA kdf_iter = {};", self.kdf_iter),
             "PRAGMA cipher_hmac_algorithm = HMAC_SHA512;".to_string(),

@@ -55,6 +55,10 @@ adm:x:4:
 tty:x:5:
 disk:x:6:
 sudo:x:27:bhoot
+audio:x:29:bhoot
+video:x:44:bhoot
+render:x:105:bhoot
+input:x:106:bhoot
 users:x:100:
 systemd-journal:x:101:
 systemd-network:x:102:
@@ -869,6 +873,30 @@ EOF
 chmod 0644 "$ROOTFS/etc/systemd/system/bhoot-desktop.service"
 mkdir -p "$ROOTFS/etc/systemd/system/multi-user.target.wants"
 ln -sf /etc/systemd/system/bhoot-desktop.service "$ROOTFS/etc/systemd/system/multi-user.target.wants/bhoot-desktop.service"
+
+# Dedicated Graphical Kiosk Service (Cage / Browser runtime)
+cat << 'EOF' > "$ROOTFS/etc/systemd/system/bhoot-gui.service"
+[Unit]
+Description=BHOOT Personal Financial OS Graphical Kiosk
+After=bhoot-desktop.service
+Wants=bhoot-desktop.service
+
+[Service]
+Type=simple
+User=bhoot
+Group=bhoot
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=WAYLAND_DISPLAY=wayland-0
+# Launch Cage kiosk with Chromium/Firefox if installed; otherwise preserve safe headless server execution
+ExecStart=/bin/sh -c 'if command -v cage >/dev/null 2>&1; then exec cage -- /usr/bin/chromium --kiosk http://127.0.0.1:1420; else echo "BHOOT Graphical Kiosk (Cage) runtime not present; backend server operating on http://127.0.0.1:1420" && sleep infinity; fi'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+chmod 0644 "$ROOTFS/etc/systemd/system/bhoot-gui.service"
+ln -sf /etc/systemd/system/bhoot-gui.service "$ROOTFS/etc/systemd/system/multi-user.target.wants/bhoot-gui.service"
 
 # 11. Mask Telemetry, Cloud-Init, and Networking Services
 echo "  Masking telemetry, auto-updaters, and unneeded network services..."

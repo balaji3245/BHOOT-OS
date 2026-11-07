@@ -20,6 +20,7 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 tiny_http = "0.12"
+tempfile = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

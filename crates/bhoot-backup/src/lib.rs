@@ -2,8 +2,9 @@ pub mod archive;
 pub mod error;
 
 pub use archive::{
-    create_backup_file, create_encrypted_backup, inspect_backup_manifest, restore_backup_file,
-    restore_encrypted_backup, validate_destination_path, BackupManifest, BACKUP_HEADER_SIZE,
+    create_backup_file, create_encrypted_backup, create_full_backup_file, inspect_backup_manifest,
+    normalize_path, restore_backup_file, restore_encrypted_backup, restore_full_backup_file,
+    validate_destination_path, BackupArchiveBundle, BackupManifest, BACKUP_HEADER_SIZE,
     BACKUP_MAGIC_V1,
 };
 pub use error::BackupError;
@@ -71,7 +72,75 @@ mod tests {
             validate_destination_path(Path::new("/proc/sys/vm")),
             Err(BackupError::ProhibitedDestination(_))
         ));
+        assert!(matches!(
+            validate_destination_path(Path::new("/var/bhoot/backups/../../dev/sda")),
+            Err(BackupError::ProhibitedDestination(_))
+        ));
+        assert!(matches!(
+            validate_destination_path(Path::new("/home/bhoot/../../dev/nvme0n1")),
+            Err(BackupError::ProhibitedDestination(_))
+        ));
+        assert!(matches!(
+            validate_destination_path(Path::new("/var/bhoot/backups/../../etc/shadow")),
+            Err(BackupError::ProhibitedDestination(_))
+        ));
         assert!(validate_destination_path(Path::new("/home/bhoot/backup.bhoot")).is_ok());
+    }
+
+    #[test]
+    fn test_full_backup_with_vault_files_and_atomic_restore() {
+        let db_file = NamedTempFile::new().unwrap();
+        let backup_file = NamedTempFile::new().unwrap();
+        let restored_db_file = NamedTempFile::new().unwrap();
+        let vault_temp_dir = tempfile::tempdir().unwrap();
+        let restored_vault_dir = tempfile::tempdir().unwrap();
+
+        let backup_passphrase = "master-full-disaster-recovery-passphrase-2026";
+
+        // 1. Create SQLCipher database with accounts and checkpoint
+        {
+            let db = Database::open(db_file.path(), &test_db_key()).unwrap();
+            let acc1 = Account::new("Primary Vault Fund", AccountType::Asset, AccountSubtype::BankAccount, None);
+            db.create_account(&acc1).unwrap();
+            db.checkpoint().unwrap();
+        }
+
+        // 2. Create sample encrypted vault file in vault_temp_dir
+        let vault_file_path = vault_temp_dir.path().join("doc_001.bin");
+        std::fs::write(&vault_file_path, b"ENCRYPTED_VAULT_ATTACHMENT_BYTES").unwrap();
+
+        // 3. Create full backup
+        let written = create_full_backup_file(
+            db_file.path(),
+            Some(vault_temp_dir.path()),
+            backup_file.path(),
+            backup_passphrase,
+        ).unwrap();
+        assert!(written > BACKUP_HEADER_SIZE);
+
+        // 4. Restore full backup
+        let restored_bytes = restore_full_backup_file(
+            backup_file.path(),
+            restored_db_file.path(),
+            Some(restored_vault_dir.path()),
+            backup_passphrase,
+        ).unwrap();
+        assert!(restored_bytes > 0);
+
+        // 5. Verify restored database
+        {
+            let db = Database::open(restored_db_file.path(), &test_db_key()).unwrap();
+            let accounts = db.list_accounts().unwrap();
+            assert_eq!(accounts.len(), 1);
+            assert_eq!(accounts[0].name, "Primary Vault Fund");
+            assert!(db.integrity_check().unwrap());
+        }
+
+        // 6. Verify restored vault file
+        let restored_vault_file = restored_vault_dir.path().join("doc_001.bin");
+        assert!(restored_vault_file.exists());
+        let content = std::fs::read(restored_vault_file).unwrap();
+        assert_eq!(content, b"ENCRYPTED_VAULT_ATTACHMENT_BYTES");
     }
 
     #[test]

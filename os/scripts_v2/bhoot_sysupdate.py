@@ -34,6 +34,63 @@ CRITICAL_PATHS = [
 ]
 
 
+def get_mount_info(path: Path):
+    """
+    Determines mountpoint and read-only status for a path by inspecting /proc/mounts.
+    Returns (mount_point_path_str, is_read_only).
+    """
+    resolved = str(path.resolve())
+    best_mp = None
+    best_len = -1
+    is_ro = False
+
+    try:
+        with open("/proc/mounts", "r") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 4:
+                    mp = parts[1]
+                    opts = parts[3].split(",")
+                    if resolved == mp or resolved.startswith(mp + "/") or mp == "/":
+                        if len(mp) > best_len:
+                            best_mp = mp
+                            best_len = len(mp)
+                            is_ro = "ro" in opts
+    except OSError:
+        pass
+
+    return best_mp, is_ro
+
+
+class MountManager:
+    """Context manager to safely handle read-only live media mounts during updates."""
+    def __init__(self, target_dir: Path):
+        self.target_dir = target_dir
+        self.mount_point, self.was_ro = get_mount_info(target_dir)
+        self.remounted_rw = False
+
+    def __enter__(self):
+        if self.was_ro and self.mount_point:
+            print(f" [INFO] Target mount {self.mount_point} is read-only. Remounting read-write for atomic update...")
+            res = subprocess.run(["mount", "-o", "remount,rw", self.mount_point], check=False, capture_output=True, text=True)
+            if res.returncode == 0:
+                self.remounted_rw = True
+                print(" [OK] Remounted read-write successfully.")
+            else:
+                print(f" [WARN] Failed to remount rw: {res.stderr.strip()}. Attempting update directly.")
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.remounted_rw and self.mount_point:
+            print(f" [INFO] Restoring read-only status on {self.mount_point}...")
+            res = subprocess.run(["mount", "-o", "remount,ro", self.mount_point], check=False, capture_output=True, text=True)
+            if res.returncode == 0:
+                print(" [OK] Restored read-only mount status.")
+            else:
+                print(f" [WARN] Could not restore ro mount: {res.stderr.strip()}")
+
+
+
 def compute_sha256(filepath: Path) -> str:
     """Computes SHA-256 checksum of a file in 1 MiB chunks."""
     h = hashlib.sha256()
@@ -193,43 +250,44 @@ def cmd_apply(image_path: Path, target_dir: Path, expected_sha256: str = None, s
     rollback_img = target_dir / "filesystem.squashfs.rollback"
     staging_img = target_dir / "filesystem.squashfs.new"
 
-    target_dir.mkdir(parents=True, exist_ok=True)
+    with MountManager(target_dir):
+        target_dir.mkdir(parents=True, exist_ok=True)
 
-    print("\n------------------------------------------------------------------------")
-    print(" [APPLY] Executing Atomic System Image Update...")
+        print("\n------------------------------------------------------------------------")
+        print(" [APPLY] Executing Atomic System Image Update...")
 
-    old_sha256 = compute_sha256(active_img) if active_img.exists() else "NONE"
+        old_sha256 = compute_sha256(active_img) if active_img.exists() else "NONE"
 
-    # 2. Stage new image
-    print(f" 1. Copying update to temporary staging file: {staging_img}...")
-    shutil.copy2(image_path, staging_img)
-    # Flush staging file to disk
-    with open(staging_img, "rb") as f:
-        os.fdatasync(f.fileno())
+        # 2. Stage new image
+        print(f" 1. Copying update to temporary staging file: {staging_img}...")
+        shutil.copy2(image_path, staging_img)
+        # Flush staging file to disk
+        with open(staging_img, "rb") as f:
+            os.fdatasync(f.fileno())
 
-    # 3. Preserve rollback backup
-    if active_img.exists():
-        print(f" 2. Preserving previous image as rollback snapshot: {rollback_img}...")
-        if rollback_img.exists():
-            rollback_img.unlink()
+        # 3. Preserve rollback backup
+        if active_img.exists():
+            print(f" 2. Preserving previous image as rollback snapshot: {rollback_img}...")
+            if rollback_img.exists():
+                rollback_img.unlink()
+            try:
+                os.link(active_img, rollback_img)
+            except OSError:
+                shutil.copy2(active_img, rollback_img)
+
+        # 4. Atomic swap via POSIX atomic rename
+        print(f" 3. Atomically replacing {active_img} with staged image...")
+        os.replace(staging_img, active_img)
+
+        # Sync directory
         try:
-            os.link(active_img, rollback_img)
+            dir_fd = os.open(str(target_dir), os.O_DIRECTORY | os.O_RDONLY)
+            os.fsync(dir_fd)
+            os.close(dir_fd)
         except OSError:
-            shutil.copy2(active_img, rollback_img)
+            pass
 
-    # 4. Atomic swap via POSIX atomic rename
-    print(f" 3. Atomically replacing {active_img} with staged image...")
-    os.replace(staging_img, active_img)
-
-    # Sync directory
-    try:
-        dir_fd = os.open(str(target_dir), os.O_DIRECTORY | os.O_RDONLY)
-        os.fsync(dir_fd)
-        os.close(dir_fd)
-    except OSError:
-        pass
-
-    new_sha256 = compute_sha256(active_img)
+        new_sha256 = compute_sha256(active_img)
 
     # 5. Record audit log
     audit_log = Path("/var/bhoot/audit/sysupdate.log")
@@ -280,20 +338,21 @@ def cmd_rollback(target_dir: Path) -> int:
 
     print(f" Restoring rollback image: {rollback_img} (SHA-256: {rb_sha})")
 
-    # Move active to failed_update
-    if active_img.exists():
-        os.replace(active_img, temp_swap_img)
+    with MountManager(target_dir):
+        # Move active to failed_update
+        if active_img.exists():
+            os.replace(active_img, temp_swap_img)
 
-    # Move rollback to active
-    os.replace(rollback_img, active_img)
+        # Move rollback to active
+        os.replace(rollback_img, active_img)
 
-    # Sync
-    try:
-        dir_fd = os.open(str(target_dir), os.O_DIRECTORY | os.O_RDONLY)
-        os.fsync(dir_fd)
-        os.close(dir_fd)
-    except OSError:
-        pass
+        # Sync
+        try:
+            dir_fd = os.open(str(target_dir), os.O_DIRECTORY | os.O_RDONLY)
+            os.fsync(dir_fd)
+            os.close(dir_fd)
+        except OSError:
+            pass
 
     # Audit log
     audit_log = Path("/var/bhoot/audit/sysupdate.log")

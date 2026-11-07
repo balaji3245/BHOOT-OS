@@ -152,6 +152,12 @@ impl Database {
         Ok(())
     }
 
+    /// Force a full SQLite WAL checkpoint, flushing and truncating the write-ahead log.
+    pub fn checkpoint(&self) -> Result<(), DbError> {
+        self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(())
+    }
+
     // =========================================================================
     // ACCOUNT REPOSITORY
     // =========================================================================

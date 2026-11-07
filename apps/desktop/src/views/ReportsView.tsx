@@ -24,7 +24,7 @@ export const ReportsView: React.FC = () => {
         setIncomeStatement(pnl);
         setCashFlow(cfs);
       } catch (err) {
-        console.error(err);
+        console.error('Failed to load financial statements:', err);
       } finally {
         setLoading(false);
       }
@@ -67,7 +67,13 @@ export const ReportsView: React.FC = () => {
   };
 
   if (loading) {
-    return <div className="p-8 text-center text-xs text-slate-500">Generating statements...</div>;
+    return (
+      <div className="flex items-center justify-center h-full min-h-[400px]">
+        <div className="text-white animate-pulse text-xs tracking-wider uppercase font-mono">
+          Generating Financial Statements...
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -75,14 +81,14 @@ export const ReportsView: React.FC = () => {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-extrabold text-white tracking-tight">Financial Reports</h1>
-          <p className="text-xs text-slate-400">
+          <p className="text-xs text-neutral-400">
             Standardized double-entry GAAP/IFRS compliant financial statements
           </p>
         </div>
 
         <button
           onClick={handleExportReportCsv}
-          className="flex items-center space-x-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition"
+          className="flex items-center space-x-1.5 px-3 py-2 bg-[#181818] hover:bg-[#222222] text-white text-xs font-semibold rounded-lg border border-[#333333] transition"
         >
           <Download className="w-3.5 h-3.5" />
           <span>Export Active Statement</span>
@@ -90,13 +96,13 @@ export const ReportsView: React.FC = () => {
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-slate-800 space-x-6 text-sm">
+      <div className="flex border-b border-[#222222] space-x-6 text-sm">
         <button
           onClick={() => setActiveTab('bs')}
           className={`pb-3 font-semibold transition border-b-2 flex items-center space-x-2 ${
             activeTab === 'bs'
-              ? 'text-emerald-400 border-emerald-400'
-              : 'text-slate-400 border-transparent hover:text-slate-200'
+              ? 'text-white border-white'
+              : 'text-neutral-400 border-transparent hover:text-white'
           }`}
         >
           <Layers className="w-4 h-4" />
@@ -106,8 +112,8 @@ export const ReportsView: React.FC = () => {
           onClick={() => setActiveTab('pnl')}
           className={`pb-3 font-semibold transition border-b-2 flex items-center space-x-2 ${
             activeTab === 'pnl'
-              ? 'text-emerald-400 border-emerald-400'
-              : 'text-slate-400 border-transparent hover:text-slate-200'
+              ? 'text-white border-white'
+              : 'text-neutral-400 border-transparent hover:text-white'
           }`}
         >
           <TrendingUp className="w-4 h-4" />
@@ -117,8 +123,8 @@ export const ReportsView: React.FC = () => {
           onClick={() => setActiveTab('cfs')}
           className={`pb-3 font-semibold transition border-b-2 flex items-center space-x-2 ${
             activeTab === 'cfs'
-              ? 'text-emerald-400 border-emerald-400'
-              : 'text-slate-400 border-transparent hover:text-slate-200'
+              ? 'text-white border-white'
+              : 'text-neutral-400 border-transparent hover:text-white'
           }`}
         >
           <DollarSign className="w-4 h-4" />
@@ -129,29 +135,29 @@ export const ReportsView: React.FC = () => {
       {/* Tab 1: Balance Sheet */}
       {activeTab === 'bs' && balanceSheet && (
         <div className="space-y-6">
-          <div className="flex items-center justify-between p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
+          <div className="flex items-center justify-between p-4 bg-[#111111] border border-[#222222] rounded-xl">
             <div className="flex items-center space-x-2 text-xs text-emerald-400 font-semibold">
               <CheckCircle2 className="w-4 h-4" />
               <span>Balance Sheet Equilibrium Verified: Assets = Liabilities + Equity</span>
             </div>
-            <span className="text-xs font-mono text-slate-300">
+            <span className="text-xs font-mono text-neutral-400">
               As of: {formatDate(balanceSheet.as_of)}
             </span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Assets */}
-            <div className="bg-[#111726] rounded-xl border border-slate-800 p-5 space-y-4">
-              <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+            <div className="bg-[#111111] rounded-xl border border-[#222222] p-5 space-y-4">
+              <div className="flex justify-between items-center border-b border-[#222222] pb-2">
                 <h3 className="text-sm font-bold text-white uppercase">Assets</h3>
-                <span className="font-mono text-xs font-bold text-emerald-400">
+                <span className="font-mono text-xs font-bold text-white">
                   {formatINR(balanceSheet.total_assets_paisa)}
                 </span>
               </div>
               <div className="space-y-2">
                 {balanceSheet.assets.map((a) => (
                   <div key={a.account_id} className="flex justify-between text-xs py-1">
-                    <span className="text-slate-300">{a.name}</span>
+                    <span className="text-neutral-300">{a.name}</span>
                     <span className="font-mono text-white">{formatINR(a.balance_paisa)}</span>
                   </div>
                 ))}
@@ -159,23 +165,26 @@ export const ReportsView: React.FC = () => {
             </div>
 
             {/* Liabilities & Equity */}
-            <div className="bg-[#111726] rounded-xl border border-slate-800 p-5 space-y-4">
-              <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+            <div className="bg-[#111111] rounded-xl border border-[#222222] p-5 space-y-4">
+              <div className="flex justify-between items-center border-b border-[#222222] pb-2">
                 <h3 className="text-sm font-bold text-white uppercase">Liabilities</h3>
-                <span className="font-mono text-xs font-bold text-rose-400">
+                <span className="font-mono text-xs font-bold text-red-400">
                   {formatINR(balanceSheet.total_liabilities_paisa)}
                 </span>
               </div>
               <div className="space-y-2">
                 {balanceSheet.liabilities.map((l) => (
                   <div key={l.account_id} className="flex justify-between text-xs py-1">
-                    <span className="text-slate-300">{l.name}</span>
-                    <span className="font-mono text-rose-400">{formatINR(l.balance_paisa)}</span>
+                    <span className="text-neutral-300">{l.name}</span>
+                    <span className="font-mono text-red-400">{formatINR(l.balance_paisa)}</span>
                   </div>
                 ))}
+                {balanceSheet.liabilities.length === 0 && (
+                  <div className="text-neutral-500 text-xs py-1">Zero debt claims outstanding</div>
+                )}
               </div>
 
-              <div className="pt-4 border-t border-slate-800 flex justify-between items-center pb-2">
+              <div className="pt-4 border-t border-[#222222] flex justify-between items-center pb-2">
                 <h3 className="text-sm font-bold text-white uppercase">Equity & Retained Earnings</h3>
                 <span className="font-mono text-xs font-bold text-white">
                   {formatINR(balanceSheet.total_equity_paisa + balanceSheet.retained_earnings_paisa)}
@@ -184,13 +193,17 @@ export const ReportsView: React.FC = () => {
               <div className="space-y-2">
                 {balanceSheet.equity.map((e) => (
                   <div key={e.account_id} className="flex justify-between text-xs py-1">
-                    <span className="text-slate-300">{e.name}</span>
+                    <span className="text-neutral-300">{e.name}</span>
                     <span className="font-mono text-white">{formatINR(e.balance_paisa)}</span>
                   </div>
                 ))}
-                <div className="flex justify-between text-xs py-1 border-t border-slate-800/60 pt-2 font-semibold">
-                  <span className="text-emerald-400">Retained Earnings (Realized Net P&L)</span>
-                  <span className="font-mono text-emerald-400">
+                <div className="flex justify-between text-xs py-1 border-t border-[#222222] pt-2 font-semibold">
+                  <span className="text-neutral-300">Retained Earnings (Realized Net P&L)</span>
+                  <span
+                    className={`font-mono ${
+                      balanceSheet.retained_earnings_paisa >= 0 ? 'text-emerald-400' : 'text-red-400'
+                    }`}
+                  >
                     {formatINR(balanceSheet.retained_earnings_paisa)}
                   </span>
                 </div>
@@ -202,16 +215,16 @@ export const ReportsView: React.FC = () => {
 
       {/* Tab 2: Profit & Loss */}
       {activeTab === 'pnl' && incomeStatement && (
-        <div className="bg-[#111726] rounded-xl border border-slate-800 p-6 space-y-6">
-          <div className="flex justify-between items-center border-b border-slate-800 pb-3 text-xs">
-            <span className="text-slate-400">
+        <div className="bg-[#111111] rounded-xl border border-[#222222] p-6 space-y-6">
+          <div className="flex justify-between items-center border-b border-[#222222] pb-3 text-xs">
+            <span className="text-neutral-400">
               Reporting Window: {formatDate(incomeStatement.from)} to {formatDate(incomeStatement.to)}
             </span>
             <div className="flex items-center space-x-2">
-              <span className="text-slate-400">Net Profit / Surplus:</span>
+              <span className="text-neutral-400">Net Profit / Surplus:</span>
               <span
                 className={`font-mono font-bold text-sm ${
-                  incomeStatement.net_profit_paisa >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                  incomeStatement.net_profit_paisa >= 0 ? 'text-emerald-400' : 'text-red-400'
                 }`}
               >
                 {formatINR(incomeStatement.net_profit_paisa)}
@@ -225,13 +238,16 @@ export const ReportsView: React.FC = () => {
               <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-2">
                 1. Operating Income
               </h4>
-              <div className="bg-slate-900/40 rounded-lg p-3 space-y-2">
+              <div className="bg-[#181818] rounded-lg p-3 space-y-2">
                 {incomeStatement.operating_income.map((i) => (
                   <div key={i.account_id} className="flex justify-between text-xs">
-                    <span className="text-slate-300">{i.name}</span>
+                    <span className="text-neutral-300">{i.name}</span>
                     <span className="font-mono text-white">{formatINR(i.balance_paisa)}</span>
                   </div>
                 ))}
+                {incomeStatement.operating_income.length === 0 && (
+                  <div className="text-neutral-500 text-xs py-1">No operating income in this window</div>
+                )}
               </div>
             </div>
 
@@ -240,22 +256,26 @@ export const ReportsView: React.FC = () => {
               <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-2">
                 2. Market Execution & Trading
               </h4>
-              <div className="bg-slate-900/40 rounded-lg p-3 space-y-2 text-xs">
+              <div className="bg-[#181818] rounded-lg p-3 space-y-2 text-xs">
                 <div className="flex justify-between">
-                  <span className="text-slate-300">Gross Realized Trading P&L</span>
+                  <span className="text-neutral-300">Gross Realized Trading P&L</span>
                   <span className="font-mono text-white">
                     {formatINR(incomeStatement.trading_gross_pnl_paisa)}
                   </span>
                 </div>
-                <div className="flex justify-between text-slate-400">
+                <div className="flex justify-between text-neutral-400">
                   <span>Less: Brokerage & Statutory Taxes (STT/GST)</span>
-                  <span className="font-mono text-rose-400">
+                  <span className="font-mono text-red-400">
                     -{formatINR(incomeStatement.trading_charges_paisa)}
                   </span>
                 </div>
-                <div className="flex justify-between border-t border-slate-800 pt-1 font-semibold">
-                  <span className="text-emerald-400">Net Trading Revenue</span>
-                  <span className="font-mono text-emerald-400">
+                <div className="flex justify-between border-t border-[#222222] pt-1 font-semibold">
+                  <span className="text-neutral-200">Net Trading Revenue</span>
+                  <span
+                    className={`font-mono ${
+                      incomeStatement.trading_net_pnl_paisa >= 0 ? 'text-emerald-400' : 'text-red-400'
+                    }`}
+                  >
                     {formatINR(incomeStatement.trading_net_pnl_paisa)}
                   </span>
                 </div>
@@ -267,13 +287,16 @@ export const ReportsView: React.FC = () => {
               <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-2">
                 3. Operating & Living Expenses
               </h4>
-              <div className="bg-slate-900/40 rounded-lg p-3 space-y-2">
+              <div className="bg-[#181818] rounded-lg p-3 space-y-2">
                 {incomeStatement.operating_expenses.map((e) => (
                   <div key={e.account_id} className="flex justify-between text-xs">
-                    <span className="text-slate-300">{e.name}</span>
-                    <span className="font-mono text-rose-400">{formatINR(e.balance_paisa)}</span>
+                    <span className="text-neutral-300">{e.name}</span>
+                    <span className="font-mono text-red-400">{formatINR(e.balance_paisa)}</span>
                   </div>
                 ))}
+                {incomeStatement.operating_expenses.length === 0 && (
+                  <div className="text-neutral-500 text-xs py-1">No operating expenses recorded</div>
+                )}
               </div>
             </div>
           </div>
@@ -282,36 +305,38 @@ export const ReportsView: React.FC = () => {
 
       {/* Tab 3: Cash Flow Statement */}
       {activeTab === 'cfs' && cashFlow && (
-        <div className="bg-[#111726] rounded-xl border border-slate-800 p-6 space-y-4 text-xs">
-          <div className="flex justify-between border-b border-slate-800 pb-3">
-            <span className="text-slate-400 font-semibold uppercase">Cash Flow Activities</span>
-            <span className="text-slate-400 font-semibold uppercase">Amount</span>
+        <div className="bg-[#111111] rounded-xl border border-[#222222] p-6 space-y-4 text-xs">
+          <div className="flex justify-between border-b border-[#222222] pb-3">
+            <span className="text-neutral-400 font-semibold uppercase">Cash Flow Activities</span>
+            <span className="text-neutral-400 font-semibold uppercase">Amount</span>
           </div>
 
           <div className="space-y-3 font-mono">
-            <div className="flex justify-between text-slate-300">
+            <div className="flex justify-between text-neutral-300">
               <span className="font-sans">Beginning Cash Balance</span>
               <span className="font-bold text-white">{formatINR(cashFlow.beginning_cash_paisa)}</span>
             </div>
 
-            <div className="flex justify-between text-emerald-400 pl-4 border-l-2 border-emerald-500/40">
+            <div className="flex justify-between text-neutral-300 pl-4 border-l-2 border-neutral-700">
               <span className="font-sans">Cash Flow from Operating Activities (Net Profit)</span>
-              <span>{formatINR(cashFlow.operating_cash_flow_paisa)}</span>
+              <span className={cashFlow.operating_cash_flow_paisa >= 0 ? 'text-emerald-400' : 'text-red-400'}>
+                {formatINR(cashFlow.operating_cash_flow_paisa)}
+              </span>
             </div>
 
-            <div className="flex justify-between text-blue-400 pl-4 border-l-2 border-blue-500/40">
+            <div className="flex justify-between text-neutral-300 pl-4 border-l-2 border-neutral-700">
               <span className="font-sans">Cash Flow from Investing Activities</span>
               <span>{formatINR(cashFlow.investing_cash_flow_paisa)}</span>
             </div>
 
-            <div className="flex justify-between text-amber-400 pl-4 border-l-2 border-amber-500/40">
+            <div className="flex justify-between text-neutral-300 pl-4 border-l-2 border-neutral-700">
               <span className="font-sans">Cash Flow from Financing Activities</span>
               <span>{formatINR(cashFlow.financing_cash_flow_paisa)}</span>
             </div>
 
-            <div className="pt-3 border-t border-slate-800 flex justify-between font-bold text-sm text-white">
+            <div className="pt-3 border-t border-[#222222] flex justify-between font-bold text-sm text-white">
               <span className="font-sans">Ending Cash & Liquid Bank Balance</span>
-              <span className="text-emerald-400">{formatINR(cashFlow.ending_cash_paisa)}</span>
+              <span className="text-white">{formatINR(cashFlow.ending_cash_paisa)}</span>
             </div>
           </div>
         </div>

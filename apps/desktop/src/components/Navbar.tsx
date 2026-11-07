@@ -14,33 +14,33 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenQuickTx }) => {
   });
 
   return (
-    <header className="h-16 border-b border-slate-800/80 bg-[#0d121f]/90 backdrop-blur px-8 flex items-center justify-between">
-      {/* Search / Title Context */}
-      <div className="flex items-center space-x-4">
-        <div className="flex items-center space-x-2 text-xs bg-slate-800/60 text-slate-300 px-3 py-1.5 rounded-md border border-slate-700/60">
-          <Clock className="w-3.5 h-3.5 text-slate-400" />
+    <header className="h-16 border-b border-neutral-800 bg-black/90 backdrop-blur px-8 flex items-center justify-between">
+      {/* Context Badges */}
+      <div className="flex items-center space-x-3">
+        <div className="flex items-center space-x-2 text-xs bg-[#121212] text-neutral-300 px-3 py-1.5 rounded-md border border-neutral-800">
+          <Clock className="w-3.5 h-3.5 text-neutral-400" />
           <span>{today}</span>
         </div>
 
-        <div className="flex items-center space-x-1.5 text-xs bg-emerald-500/10 text-emerald-400 px-3 py-1.5 rounded-md border border-emerald-500/20">
-          <WifiOff className="w-3.5 h-3.5" />
-          <span className="font-medium">100% Offline Airgapped Mode</span>
+        <div className="flex items-center space-x-1.5 text-xs bg-[#121212] text-neutral-300 px-3 py-1.5 rounded-md border border-neutral-800">
+          <WifiOff className="w-3.5 h-3.5 text-neutral-400" />
+          <span className="font-medium">Offline Airgapped</span>
         </div>
       </div>
 
-      {/* Action Buttons */}
+      {/* Action Controls */}
       <div className="flex items-center space-x-3">
-        <div className="flex items-center space-x-1.5 text-xs bg-blue-500/10 text-blue-400 px-3 py-1.5 rounded-md border border-blue-500/20">
-          <ShieldCheck className="w-3.5 h-3.5" />
-          <span>Audit Chain: Continuous</span>
+        <div className="flex items-center space-x-1.5 text-xs bg-[#121212] text-neutral-300 px-3 py-1.5 rounded-md border border-neutral-800">
+          <ShieldCheck className="w-3.5 h-3.5 text-neutral-400" />
+          <span>Audit Chain: Active</span>
         </div>
 
         <button
           onClick={onOpenQuickTx}
-          className="flex items-center space-x-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded-lg shadow-sm transition"
+          className="flex items-center space-x-1.5 bg-white hover:bg-neutral-200 text-black text-xs font-semibold px-3.5 py-1.5 rounded-lg shadow transition"
         >
-          <Plus className="w-4 h-4" />
-          <span>Post Transaction</span>
+          <Plus className="w-3.5 h-3.5" />
+          <span>Record Entry</span>
         </button>
       </div>
     </header>

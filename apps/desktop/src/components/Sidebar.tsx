@@ -49,17 +49,17 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, onLoc
   ];
 
   return (
-    <aside className="w-64 bg-[#0d121f] border-r border-slate-800/80 flex flex-col h-screen select-none">
+    <aside className="w-64 bg-black border-r border-neutral-800 flex flex-col h-screen select-none">
       {/* Brand Header */}
-      <div className="p-6 border-b border-slate-800/80 flex items-center justify-between">
+      <div className="p-5 border-b border-neutral-800 flex items-center justify-between">
         <div className="flex items-center space-x-3">
-          <div className="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-bold text-xl tracking-wider shadow-inner">
+          <div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center text-black font-extrabold text-lg tracking-wider shadow">
             भ
           </div>
           <div>
-            <h1 className="font-extrabold text-lg text-white tracking-wide">BHOOT</h1>
-            <p className="text-[10px] uppercase tracking-widest text-emerald-400 font-semibold">
-              Offline OS v1.0
+            <h1 className="font-extrabold text-base text-white tracking-wider">BHOOT</h1>
+            <p className="text-[10px] uppercase tracking-widest text-neutral-400 font-medium">
+              Financial OS v1.0
             </p>
           </div>
         </div>
@@ -74,13 +74,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, onLoc
             <button
               key={item.id}
               onClick={() => setActiveTab(item.id)}
-              className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all ${
+              className={`w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
                 isActive
-                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'
+                  ? 'bg-white text-black shadow-sm font-semibold'
+                  : 'text-neutral-400 hover:text-white hover:bg-neutral-900 border border-transparent'
               }`}
             >
-              <Icon className={`w-4 h-4 ${isActive ? 'text-emerald-400' : 'text-slate-400'}`} />
+              <Icon className={`w-4 h-4 ${isActive ? 'text-black' : 'text-neutral-400'}`} />
               <span>{item.label}</span>
             </button>
           );
@@ -88,22 +88,23 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, onLoc
       </nav>
 
       {/* Security & Lock Badge Footer */}
-      <div className="p-4 border-t border-slate-800/80 bg-slate-900/40">
+      <div className="p-4 border-t border-neutral-800 bg-[#080808]">
         <div className="flex items-center justify-between mb-3 px-1">
           <div className="flex items-center space-x-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span className="text-xs text-slate-300 font-medium">LUKS2 + SQLCipher</span>
+            <span className="w-2 h-2 rounded-full bg-neutral-400"></span>
+            <span className="text-xs text-neutral-300 font-medium">Encrypted Storage</span>
           </div>
-          <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded border border-emerald-500/30 font-mono">
-            AIRGAPPED
+          <span className="text-[10px] bg-neutral-800 text-neutral-300 px-2 py-0.5 rounded border border-neutral-700 font-mono tracking-wider">
+            OFFLINE
           </span>
         </div>
+
         <button
           onClick={onLockSession}
-          className="w-full flex items-center justify-center space-x-2 py-2 px-3 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-semibold transition"
+          className="w-full flex items-center justify-center space-x-2 py-2 px-3 rounded-lg bg-[#141414] hover:bg-neutral-800 text-neutral-300 hover:text-white text-xs font-semibold border border-neutral-800 transition"
         >
           <Lock className="w-3.5 h-3.5" />
-          <span>Lock Session</span>
+          <span>Lock Financial OS</span>
         </button>
       </div>
     </aside>
