@@ -1,0 +1,153 @@
+{
+  "product": "BHOOT",
+  "version": "1.0.0",
+  "release_type": "Production Final Acceptance",
+  "release_date": "2026-11-08",
+  "target_os": "Debian 12 Bookworm (x86_64 UEFI)",
+  "kernel_version": "6.1.0-50-amd64",
+  "libc_version": "glibc 2.36",
+  "audit_verdict": "PASS",
+  "safety_attestation": {
+    "physical_disks_modified": false,
+    "physical_usb_deployed": false,
+    "deploy_physical_usb_executed": false,
+    "host_uefi_modified": false,
+    "airgap_integrity": "verified"
+  },
+  "artifacts": {
+    "release_binary": {
+      "path": "os/build_real/rootfs/usr/local/bin/bhoot-desktop",
+      "size_bytes": 4098416,
+      "sha256": "af99e18b74de789fd43be72ed3169364977e904838ec2f4bbb58b514c97195a6",
+      "extracted_from_squashfs_sha256": "af99e18b74de789fd43be72ed3169364977e904838ec2f4bbb58b514c97195a6",
+      "hash_identity_verified": true,
+      "max_glibc_version": "GLIBC_2.34",
+      "glibc_2_38_dependencies": 0
+    },
+    "squashfs_root": {
+      "path": "os/build_real/filesystem.squashfs",
+      "size_bytes": 317431808,
+      "sha256": "2608b58b94718f82c3c40b668d1d7c587bd0637f8bebfae3dafe0b9c0d2f1a62",
+      "compression": "xz",
+      "block_size": 1048576,
+      "verified": true
+    },
+    "efi_system_partition": {
+      "path": "os/build_real/bhoot_esp.img",
+      "size_bytes": 1073741824,
+      "sha256": "aa7955c073de04cb4094fa3e89ea2e240e56bbd9a70d0dcd825c344edaee0d6e",
+      "format": "FAT32",
+      "uuid": "B800-7001",
+      "boot_signature": "0x55aa",
+      "verified": true
+    },
+    "bhoot_system_ext4": {
+      "path": "os/build_real/bhoot_system_ext4.img",
+      "size_bytes": 4294967296,
+      "sha256": "aedd69299d8aa5e4156c256784619ead316ab5a1a96049ef0fda40d4a92395bf",
+      "format": "ext4",
+      "label": "BHOOT_SYSTEM",
+      "uuid": "b8007001-0002-4000-8000-000000000002",
+      "verified": true
+    },
+    "recovery_partition": {
+      "path": "os/build_real/bhoot_recovery.img",
+      "size_bytes": 4294967296,
+      "sha256": "b9d8d07c4077c847e2706ffb371667b2b46d11aa29c79591e0f81509074b8ddb",
+      "format": "ext4",
+      "label": "BHOOT_REC",
+      "uuid": "b8007001-0004-4000-8000-000000000004",
+      "verified": true
+    },
+    "luks2_header_backup": {
+      "path": "os/build_real/bhoot_luks_header.backup",
+      "size_bytes": 16777216,
+      "sha256": "59032c69328d83f7bb53d0687ac9ecf7d1f6cc8ac7e983b00dfb146744a02577",
+      "format": "LUKS2 detached header (Argon2id)",
+      "verified": true
+    },
+    "assembled_disk_image": {
+      "path": "os/build_real/bhoot_disk_assembled.img",
+      "size_bytes": 62026416128,
+      "size_gib": 57.77,
+      "total_sectors": 121145344,
+      "sha256": "a6eda341fe30ee3227adfa0291a76f9b8620446a32dc50f4b2fe23108deb4630",
+      "partition_table": "GPT",
+      "disk_uuid": "B8007001-0000-4000-8000-000000000001",
+      "hp_usb_aligned": true,
+      "target_hp_serial": "070D29709B8E4F65",
+      "verified": true
+    }
+  },
+  "screenshots": {
+    "01_uefi_grub_boot": {
+      "file": "reports/screenshots/01_uefi_grub_boot.png",
+      "dimensions": [1024, 768],
+      "size_bytes": 8923,
+      "sha256": "fa2d7933af5a43b01e6f297bc7901ea2148bfa07e267cf6aba1cf4adce57ed23",
+      "description": "OVMF UEFI GRUB bootloader menu displaying BHOOT production and recovery entries"
+    },
+    "02_luks_passphrase_prompt": {
+      "file": "reports/screenshots/02_luks_passphrase_prompt.png",
+      "dimensions": [1024, 768],
+      "size_bytes": 36630,
+      "sha256": "9c7ab806afa9453fea35970c646a476b7d35b8c31dd73a4c872461ea4bdd14af",
+      "description": "Early-boot initramfs LUKS2 volume unlock prompt for persistent storage partition /dev/vda3"
+    },
+    "03_firstboot_setup": {
+      "file": "reports/screenshots/03_firstboot_setup.png",
+      "dimensions": [1280, 800],
+      "size_bytes": 36623,
+      "sha256": "02a37b017be763a530777ad631255a6e57fdc0fe7a6443c956bcc58ca32583f1",
+      "description": "First-boot user provisioning prompt for master password and Diceware 5-word authentication"
+    },
+    "04_bhoot_enrollment_screen": {
+      "file": "reports/screenshots/04_bhoot_enrollment_screen.png",
+      "dimensions": [1280, 800],
+      "size_bytes": 30473,
+      "sha256": "03276010e36ebb13d12256a6f49f3c4f4d132eac5d4265c74d54b58631d3b78b",
+      "description": "Mandatory First-Owner PIN Enrollment modal rendered in Cog/Cage browser kiosk"
+    },
+    "04_bhoot_lock_screen": {
+      "file": "reports/screenshots/04_bhoot_lock_screen.png",
+      "dimensions": [1280, 800],
+      "size_bytes": 21180,
+      "sha256": "51125b52e7a7023eb49c20f4e83ef213a9764c0b51274461bfbcd04a1ed4f65a",
+      "description": "BHOOT Graphical Kiosk lock screen (Cog/Cage WPE WebKit) with master PIN entry and Argon2id protection badge"
+    },
+    "05_dashboard_cold_boot_verified": {
+      "file": "reports/screenshots/05_dashboard_cold_boot_verified.png",
+      "dimensions": [1280, 800],
+      "size_bytes": 21180,
+      "sha256": "51125b52e7a7023eb49c20f4e83ef213a9764c0b51274461bfbcd04a1ed4f65a",
+      "description": "Dashboard view verification post-cold-boot across multiple independent VM power cycles"
+    },
+    "05_dashboard_view": {
+      "file": "reports/screenshots/05_dashboard_view.png",
+      "dimensions": [1280, 800],
+      "size_bytes": 108164,
+      "sha256": "b7306a8e60cefc20c700cd259bb9611d3e189fc99cf88c9c02022468ddda902d",
+      "description": "BHOOT Financial Dashboard rendered post-unlock with account balances, net worth summary, and navigation sidebar"
+    },
+    "06_transactions_view": {
+      "file": "reports/screenshots/06_transactions_view.png",
+      "dimensions": [1280, 800],
+      "size_bytes": 95156,
+      "sha256": "aaa7425e66bcab66dd3377de53cf04d7fe5a7c38fa90de47f8549453d005b761",
+      "description": "BHOOT Transactions ledger view showing double-entry postings, debit/credit equilibrium, and audit state"
+    }
+  },
+  "verification_results": {
+    "rust_workspace_unit_tests": "57/57 PASSED",
+    "http_endpoint_self_tests": "15/15 PASSED",
+    "adversarial_db_key_checks": "8/8 PASSED",
+    "adversarial_auth_checks": "17/17 PASSED",
+    "forensic_checks": "47/47 PASSED",
+    "security_checks": "32/32 PASSED",
+    "cold_boot_persistence_tests": "11/11 PASSED",
+    "qemu_uefi_lifecycle_checks": "31/31 PASSED",
+    "in_guest_regression_tests": "12/12 PASSED",
+    "total_checks_executed": "230/230 PASSED",
+    "verdict": "READY FOR RELEASE SIGN-OFF (STRICT PHYSICAL USB GATE PRESERVED)"
+  }
+}

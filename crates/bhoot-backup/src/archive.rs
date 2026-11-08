@@ -251,7 +251,16 @@ pub struct BackupArchiveBundle {
     pub version: u32,
     pub created_at: DateTime<Utc>,
     pub db_bytes: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_key: Option<[u8; 32]>,
     pub vault_files: Vec<(String, Vec<u8>)>,
+}
+
+/// Result returned from restoring a full backup bundle, exposing database size and optional key.
+#[derive(Debug, Clone)]
+pub struct RestoredBackupResult {
+    pub db_bytes_len: usize,
+    pub db_key: Option<[u8; 32]>,
 }
 
 /// Create a comprehensive encrypted backup archive file on disk containing both the database
@@ -261,6 +270,18 @@ pub fn create_full_backup_file(
     vault_dir: Option<&Path>,
     output_backup_path: &Path,
     passphrase: &str,
+) -> Result<usize, BackupError> {
+    create_full_backup_file_with_key(db_file_path, vault_dir, output_backup_path, passphrase, None)
+}
+
+/// Create a full encrypted backup archive file on disk, optionally embedding the database encryption
+/// key inside the Argon2id-protected envelope so the archive can be restored on any hardware.
+pub fn create_full_backup_file_with_key(
+    db_file_path: &Path,
+    vault_dir: Option<&Path>,
+    output_backup_path: &Path,
+    passphrase: &str,
+    db_key: Option<[u8; 32]>,
 ) -> Result<usize, BackupError> {
     validate_destination_path(output_backup_path)?;
 
@@ -290,6 +311,7 @@ pub fn create_full_backup_file(
         version: 1,
         created_at: Utc::now(),
         db_bytes,
+        db_key,
         vault_files,
     };
 
@@ -324,6 +346,10 @@ pub fn create_full_backup_file(
     fs::rename(&temp_path, output_backup_path)
         .map_err(|e| BackupError::IoError(format!("Failed to rename temp backup to destination: {e}")))?;
 
+    if let Ok(dir) = fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
+
     Ok(archive_bytes.len())
 }
 
@@ -335,6 +361,18 @@ pub fn restore_full_backup_file(
     output_vault_dir: Option<&Path>,
     passphrase: &str,
 ) -> Result<usize, BackupError> {
+    let res = restore_full_backup_file_with_key(backup_file_path, output_db_path, output_vault_dir, passphrase)?;
+    Ok(res.db_bytes_len)
+}
+
+/// Restore a full encrypted backup archive file, extracting the SQLCipher database,
+/// restoring all document vault artifacts, and returning any embedded database encryption key.
+pub fn restore_full_backup_file_with_key(
+    backup_file_path: &Path,
+    output_db_path: &Path,
+    output_vault_dir: Option<&Path>,
+    passphrase: &str,
+) -> Result<RestoredBackupResult, BackupError> {
     validate_destination_path(output_db_path)?;
     if let Some(v_dir) = output_vault_dir {
         validate_destination_path(v_dir)?;
@@ -380,6 +418,10 @@ pub fn restore_full_backup_file(
             fs::rename(&temp_db_path, output_db_path)
                 .map_err(|e| BackupError::IoError(format!("Failed to rename restored DB: {e}")))?;
 
+            if let Ok(dir) = fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+
             // Restore vault files if directory provided
             if let Some(v_dir) = output_vault_dir {
                 fs::create_dir_all(v_dir)
@@ -402,11 +444,16 @@ pub fn restore_full_backup_file(
                 }
             }
 
-            return Ok(bundle.db_bytes.len());
+            return Ok(RestoredBackupResult {
+                db_bytes_len: bundle.db_bytes.len(),
+                db_key: bundle.db_key,
+            });
         }
     }
 
     // Fallback: Legacy raw database restore
+    let parent = output_db_path.parent().unwrap_or_else(|| Path::new("."));
+    let temp_db_path = parent.join(format!(".tmp_restore_{}", uuid::Uuid::new_v4()));
     let mut options = OpenOptions::new();
     options.write(true).create(true).truncate(true);
 
@@ -417,7 +464,7 @@ pub fn restore_full_backup_file(
     }
 
     let mut out_file = options
-        .open(output_db_path)
+        .open(&temp_db_path)
         .map_err(|e| BackupError::IoError(format!("Failed to create restored DB: {e}")))?;
 
     out_file
@@ -428,7 +475,17 @@ pub fn restore_full_backup_file(
         .sync_all()
         .map_err(|e| BackupError::IoError(format!("Failed to sync restored DB: {e}")))?;
 
-    Ok(plaintext.len())
+    fs::rename(&temp_db_path, output_db_path)
+        .map_err(|e| BackupError::IoError(format!("Failed to rename restored DB: {e}")))?;
+
+    if let Ok(dir) = fs::File::open(parent) {
+        let _ = dir.sync_all();
+    }
+
+    Ok(RestoredBackupResult {
+        db_bytes_len: plaintext.len(),
+        db_key: None,
+    })
 }
 
 /// Create an encrypted backup archive file on disk with strict file permissions (0o600).

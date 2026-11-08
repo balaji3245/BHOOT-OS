@@ -175,9 +175,15 @@ pub fn unwrap_key(
 fn save_file_atomic(path: &Path, data: &[u8], _mode: u32) -> Result<(), DbKeyError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+        }
     }
 
-    let temp_path = path.with_extension(format!("tmp.{}", std::process::id()));
+    let nonce = uuid::Uuid::new_v4().to_string();
+    let temp_path = path.with_extension(format!("tmp.{}.{}", std::process::id(), nonce));
 
     #[cfg(unix)]
     {
@@ -200,6 +206,16 @@ fn save_file_atomic(path: &Path, data: &[u8], _mode: u32) -> Result<(), DbKeyErr
     }
 
     fs::rename(&temp_path, path)?;
+
+    #[cfg(unix)]
+    {
+        if let Some(parent) = path.parent() {
+            if let Ok(dir) = fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -249,6 +265,11 @@ pub fn resolve_or_provision_database_key(
     };
 
     fs::create_dir_all(&system_dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&system_dir, fs::Permissions::from_mode(0o700));
+    }
 
     // 3. Resolve key file
     if key_file.exists() {
@@ -292,6 +313,40 @@ pub fn resolve_or_provision_database_key(
         );
         Ok(new_key)
     }
+}
+
+/// Wrap and persist an existing key (e.g. from a restored backup) into the local system key store.
+pub fn wrap_and_save_restored_key(
+    db_path: &Path,
+    key: &[u8; 32],
+    explicit_key_file: Option<&Path>,
+) -> Result<(), DbKeyError> {
+    let (key_file, system_dir) = if let Some(kf) = explicit_key_file {
+        let parent = kf.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+        (kf.to_path_buf(), parent)
+    } else if db_path == Path::new("/var/bhoot/data/bhoot.db") || Path::new("/var/bhoot/system").is_dir() {
+        let sys = PathBuf::from("/var/bhoot/system");
+        (sys.join("db_key.wrapped"), sys)
+    } else {
+        let parent = db_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+        (parent.join("db_key.wrapped"), parent)
+    };
+
+    fs::create_dir_all(&system_dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&system_dir, fs::Permissions::from_mode(0o700));
+    }
+
+    let machine_secret = get_or_create_machine_secret(&system_dir)?;
+    let store = wrap_key(key, &machine_secret)?;
+    save_wrapped_store(&key_file, &store)?;
+    println!(
+        "[BHOOT] Successfully wrapped and saved restored database key to {}",
+        key_file.display()
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -436,6 +491,24 @@ mod tests {
         let machine_metadata = fs::metadata(&machine_id_path).unwrap();
         let machine_mode = machine_metadata.permissions().mode() & 0o777;
         assert_eq!(machine_mode, 0o600, "Machine ID token must have strict 0600 permissions");
+    }
+
+    #[test]
+    fn test_wrap_and_save_restored_key_lifecycle() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("restored.db");
+        let key_file = dir.path().join("db_key.wrapped");
+
+        let arbitrary_restored_key = [0x42u8; 32];
+        wrap_and_save_restored_key(&db_path, &arbitrary_restored_key, Some(&key_file))
+            .expect("wraps and saves restored key");
+
+        // Pretend db file is present
+        fs::write(&db_path, b"restored_db_content").unwrap();
+
+        let recovered = resolve_or_provision_database_key(&db_path, Some(&key_file))
+            .expect("recovers restored key");
+        assert_eq!(*recovered, arbitrary_restored_key);
     }
 }
 

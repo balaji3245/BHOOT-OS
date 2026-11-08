@@ -1,5 +1,7 @@
 use bhoot_audit::{AuditEvent, AuditEventType};
-use bhoot_backup::{create_full_backup_file, restore_full_backup_file, validate_destination_path};
+use bhoot_backup::{
+    create_full_backup_file_with_key, restore_full_backup_file_with_key, validate_destination_path,
+};
 use bhoot_core::{
     Account, AccountId, AccountStatus, AccountSubtype, AccountType, Budget, BudgetPeriod,
     CategoryBudget, Direction, Money, PaymentMethod, Posting, TradeCharges, TradeRecord, TradeType,
@@ -20,6 +22,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use tiny_http::{Header, Request, Response, Server, StatusCode};
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 pub const EMBEDDED_INDEX_HTML: &str = include_str!("../../../apps/desktop/dist/index.html");
 pub const EMBEDDED_CSS: &[u8] = include_bytes!("../../../apps/desktop/dist/assets/index.css");
@@ -136,7 +139,7 @@ pub struct ServerState {
     pub db: Mutex<Database>,
     pub db_path: PathBuf,
     pub vault_dir: PathBuf,
-    pub master_key: [u8; 32],
+    pub master_key: Zeroizing<[u8; 32]>,
     pub session_locked: AtomicBool,
     pub is_enrolled: AtomicBool,
     pub pin_salt: Mutex<Option<[u8; 32]>>,
@@ -150,7 +153,13 @@ pub struct ServerState {
 }
 
 impl ServerState {
-    pub fn new(db: Database, db_path: PathBuf, vault_dir: PathBuf, master_key: [u8; 32]) -> Self {
+    pub fn new(
+        db: Database,
+        db_path: PathBuf,
+        vault_dir: PathBuf,
+        master_key: impl Into<Zeroizing<[u8; 32]>>,
+    ) -> Self {
+        let master_key = master_key.into();
         let conn = db.connection();
 
         // 1. Initialize credentials table
@@ -1900,7 +1909,7 @@ pub fn handle_request(mut request: Request, state: &ServerState) {
                         let _ = fs::create_dir_all(parent);
                     }
 
-                    match create_full_backup_file(&state.db_path, Some(&state.vault_dir), &dest_path, &req.passphrase) {
+                    match create_full_backup_file_with_key(&state.db_path, Some(&state.vault_dir), &dest_path, &req.passphrase, Some(*state.master_key)) {
                         Ok(bytes) => {
                             let prev_events = db.list_audit_events().unwrap_or_default();
                             let seq = prev_events.len() as u64 + 1;
@@ -1953,14 +1962,17 @@ pub fn handle_request(mut request: Request, state: &ServerState) {
                     let temp_db_path = temp_restore_dir.path().join("restored.db");
                     let temp_vault_dir = temp_restore_dir.path().join("vault");
 
-                    match restore_full_backup_file(&backup_file, &temp_db_path, Some(&temp_vault_dir), &req.passphrase) {
-                        Ok(restored_bytes) => {
+                    match restore_full_backup_file_with_key(&backup_file, &temp_db_path, Some(&temp_vault_dir), &req.passphrase) {
+                        Ok(restore_result) => {
+                            let key_to_verify = restore_result.db_key.unwrap_or(*state.master_key);
                             // Verify integrity of decrypted database with SQLCipher key
-                            match Database::open(&temp_db_path, &state.master_key) {
+                            match Database::open(&temp_db_path, &key_to_verify) {
                                 Ok(restored_db) => {
                                     if let Ok(true) = restored_db.integrity_check() {
                                         (StatusCode(200), "application/json", format!(
-                                            r#"{{"success":true,"restored_bytes":{restored_bytes},"integrity_verified":true}}"#
+                                            r#"{{"success":true,"restored_bytes":{},"integrity_verified":true,"has_embedded_key":{}}}"#,
+                                            restore_result.db_bytes_len,
+                                            restore_result.db_key.is_some()
                                         ))
                                     } else {
                                         (StatusCode(422), "application/json", r#"{"error":"Restored database failed SQLCipher integrity check"}"#.to_string())

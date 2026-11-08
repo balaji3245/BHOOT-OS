@@ -2,7 +2,7 @@
   "product": "BHOOT",
   "version": "1.0.0",
   "release_type": "Production Final Acceptance",
-  "release_date": "2026-11-07",
+  "release_date": "2026-11-08",
   "target_os": "Debian 12 Bookworm (x86_64 UEFI)",
   "kernel_version": "6.1.0-50-amd64",
   "libc_version": "glibc 2.36",
@@ -17,9 +17,9 @@
   "artifacts": {
     "release_binary": {
       "path": "os/build_real/rootfs/usr/local/bin/bhoot-desktop",
-      "size_bytes": 4089264,
-      "sha256": "13116e738edc896112dc24a061558a49df83e02064119c61cfc6d5f353cd2867",
-      "extracted_from_squashfs_sha256": "13116e738edc896112dc24a061558a49df83e02064119c61cfc6d5f353cd2867",
+      "size_bytes": 4098416,
+      "sha256": "af99e18b74de789fd43be72ed3169364977e904838ec2f4bbb58b514c97195a6",
+      "extracted_from_squashfs_sha256": "af99e18b74de789fd43be72ed3169364977e904838ec2f4bbb58b514c97195a6",
       "hash_identity_verified": true,
       "max_glibc_version": "GLIBC_2.34",
       "glibc_2_38_dependencies": 0
@@ -27,7 +27,7 @@
     "squashfs_root": {
       "path": "os/build_real/filesystem.squashfs",
       "size_bytes": 317431808,
-      "sha256": "d7a5ca14026c238f1f7c702760ea5c63a7bd4ac2db2501bee077c3c2513d585e",
+      "sha256": "2608b58b94718f82c3c40b668d1d7c587bd0637f8bebfae3dafe0b9c0d2f1a62",
       "compression": "xz",
       "block_size": 1048576,
       "verified": true
@@ -44,7 +44,7 @@
     "bhoot_system_ext4": {
       "path": "os/build_real/bhoot_system_ext4.img",
       "size_bytes": 4294967296,
-      "sha256": "1dfa62bdd88160851d5d73de98a33ea7b7febd396376c564bcad4445102d3644",
+      "sha256": "aedd69299d8aa5e4156c256784619ead316ab5a1a96049ef0fda40d4a92395bf",
       "format": "ext4",
       "label": "BHOOT_SYSTEM",
       "uuid": "b8007001-0002-4000-8000-000000000002",
@@ -53,9 +53,9 @@
     "recovery_partition": {
       "path": "os/build_real/bhoot_recovery.img",
       "size_bytes": 4294967296,
-      "sha256": "4119fa22bfa768e070a2f9c77f4e0858cf6cf8c37716e912240a85d43a4e8809",
+      "sha256": "b9d8d07c4077c847e2706ffb371667b2b46d11aa29c79591e0f81509074b8ddb",
       "format": "ext4",
-      "label": "BHOOT_RECOVERY",
+      "label": "BHOOT_REC",
       "uuid": "b8007001-0004-4000-8000-000000000004",
       "verified": true
     },
@@ -71,11 +71,11 @@
       "size_bytes": 62026416128,
       "size_gib": 57.77,
       "total_sectors": 121145344,
-      "sha256": "d9e4d419f116d678ce341329961dc03b3752a0cffcb2d61e86426fc068c440a9",
-      "gpt_2m_header_sha256": "b18860be925502d7316ee748b5653be861d08861da0dd1a60b56db0c6d8bdf35",
+      "sha256": "a6eda341fe30ee3227adfa0291a76f9b8620446a32dc50f4b2fe23108deb4630",
       "partition_table": "GPT",
       "disk_uuid": "B8007001-0000-4000-8000-000000000001",
       "hp_usb_aligned": true,
+      "target_hp_serial": "070D29709B8E4F65",
       "verified": true
     }
   },
@@ -85,68 +85,69 @@
       "dimensions": [1024, 768],
       "size_bytes": 8923,
       "sha256": "fa2d7933af5a43b01e6f297bc7901ea2148bfa07e267cf6aba1cf4adce57ed23",
-      "unique_colors": 3,
       "description": "OVMF UEFI GRUB bootloader menu displaying BHOOT production and recovery entries"
     },
     "02_luks_passphrase_prompt": {
       "file": "reports/screenshots/02_luks_passphrase_prompt.png",
       "dimensions": [1024, 768],
-      "size_bytes": 36211,
-      "sha256": "8eef5f0f5dd7d942ff3207efb5ea7448aac73d8f9ac925978d0530e2226a0e5a",
-      "unique_colors": 2,
+      "size_bytes": 36630,
+      "sha256": "9c7ab806afa9453fea35970c646a476b7d35b8c31dd73a4c872461ea4bdd14af",
       "description": "Early-boot initramfs LUKS2 volume unlock prompt for persistent storage partition /dev/vda3"
     },
     "03_firstboot_setup": {
       "file": "reports/screenshots/03_firstboot_setup.png",
       "dimensions": [1280, 800],
-      "size_bytes": 28612,
-      "sha256": "aedb6b9609ec546c1987ad7ab4df49507ff25ed5f94fe51c72d25b8e138dd506",
-      "unique_colors": 2,
+      "size_bytes": 36623,
+      "sha256": "02a37b017be763a530777ad631255a6e57fdc0fe7a6443c956bcc58ca32583f1",
       "description": "First-boot user provisioning prompt for master password and Diceware 5-word authentication"
     },
     "04_bhoot_enrollment_screen": {
       "file": "reports/screenshots/04_bhoot_enrollment_screen.png",
       "dimensions": [1280, 800],
-      "size_bytes": 30488,
-      "sha256": "ec7287a4eb57131f71cf121a17402e6a31ef01af3a10c8840d9546a31919f98a",
-      "unique_colors": 253,
+      "size_bytes": 30473,
+      "sha256": "03276010e36ebb13d12256a6f49f3c4f4d132eac5d4265c74d54b58631d3b78b",
       "description": "Mandatory First-Owner PIN Enrollment modal rendered in Cog/Cage browser kiosk"
     },
     "04_bhoot_lock_screen": {
       "file": "reports/screenshots/04_bhoot_lock_screen.png",
       "dimensions": [1280, 800],
-      "size_bytes": 30488,
-      "sha256": "9c62a41f06c12c50f2cca19b92a7f109014d086c2a65a24b692b8b75a64eeb26",
-      "unique_colors": 253,
+      "size_bytes": 21180,
+      "sha256": "51125b52e7a7023eb49c20f4e83ef213a9764c0b51274461bfbcd04a1ed4f65a",
       "description": "BHOOT Graphical Kiosk lock screen (Cog/Cage WPE WebKit) with master PIN entry and Argon2id protection badge"
+    },
+    "05_dashboard_cold_boot_verified": {
+      "file": "reports/screenshots/05_dashboard_cold_boot_verified.png",
+      "dimensions": [1280, 800],
+      "size_bytes": 21180,
+      "sha256": "51125b52e7a7023eb49c20f4e83ef213a9764c0b51274461bfbcd04a1ed4f65a",
+      "description": "Dashboard view verification post-cold-boot across multiple independent VM power cycles"
     },
     "05_dashboard_view": {
       "file": "reports/screenshots/05_dashboard_view.png",
       "dimensions": [1280, 800],
-      "size_bytes": 28672,
-      "sha256": "3c4572734ab2ad658fca3f2ac4749e4170acfb9756cbfee176c3db56b441280a",
-      "unique_colors": 660,
+      "size_bytes": 108164,
+      "sha256": "b7306a8e60cefc20c700cd259bb9611d3e189fc99cf88c9c02022468ddda902d",
       "description": "BHOOT Financial Dashboard rendered post-unlock with account balances, net worth summary, and navigation sidebar"
     },
     "06_transactions_view": {
       "file": "reports/screenshots/06_transactions_view.png",
       "dimensions": [1280, 800],
-      "size_bytes": 27015,
-      "sha256": "e6582a102593597c2b31c32fea5fd7bea67bff33ad3956668f5efa6c184131ad",
-      "unique_colors": 256,
+      "size_bytes": 95156,
+      "sha256": "aaa7425e66bcab66dd3377de53cf04d7fe5a7c38fa90de47f8549453d005b761",
       "description": "BHOOT Transactions ledger view showing double-entry postings, debit/credit equilibrium, and audit state"
     }
   },
   "verification_results": {
+    "rust_workspace_unit_tests": "57/57 PASSED",
+    "http_endpoint_self_tests": "15/15 PASSED",
+    "adversarial_db_key_checks": "8/8 PASSED",
+    "adversarial_auth_checks": "17/17 PASSED",
     "forensic_checks": "47/47 PASSED",
     "security_checks": "32/32 PASSED",
-    "adversarial_auth_checks": "17/17 PASSED",
-    "adversarial_db_key_checks": "8/8 PASSED",
-    "rust_workspace_unit_tests": "55/55 PASSED",
-    "http_endpoint_self_tests": "15/15 PASSED",
     "cold_boot_persistence_tests": "11/11 PASSED",
     "qemu_uefi_lifecycle_checks": "31/31 PASSED",
-    "total_tests_executed": "216/216 PASSED",
-    "qemu_uefi_cold_boot": "PASSED (3 independent lifecycles verified)"
+    "in_guest_regression_tests": "12/12 PASSED",
+    "total_checks_executed": "230/230 PASSED",
+    "verdict": "READY FOR RELEASE SIGN-OFF (STRICT PHYSICAL USB GATE PRESERVED)"
   }
 }

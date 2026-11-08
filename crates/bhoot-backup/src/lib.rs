@@ -2,10 +2,11 @@ pub mod archive;
 pub mod error;
 
 pub use archive::{
-    create_backup_file, create_encrypted_backup, create_full_backup_file, inspect_backup_manifest,
-    normalize_path, restore_backup_file, restore_encrypted_backup, restore_full_backup_file,
-    validate_destination_path, BackupArchiveBundle, BackupManifest, BACKUP_HEADER_SIZE,
-    BACKUP_MAGIC_V1,
+    create_backup_file, create_encrypted_backup, create_full_backup_file,
+    create_full_backup_file_with_key, inspect_backup_manifest, normalize_path, restore_backup_file,
+    restore_encrypted_backup, restore_full_backup_file, restore_full_backup_file_with_key,
+    validate_destination_path, BackupArchiveBundle, BackupManifest, RestoredBackupResult,
+    BACKUP_HEADER_SIZE, BACKUP_MAGIC_V1,
 };
 pub use error::BackupError;
 
@@ -178,5 +179,59 @@ mod tests {
             assert_eq!(accounts[1].name, "Salary");
             assert!(db.integrity_check().unwrap());
         }
+    }
+
+    #[test]
+    fn test_full_backup_with_embedded_db_key_cross_environment_restore() {
+        let db_file = NamedTempFile::new().unwrap();
+        let backup_file = NamedTempFile::new().unwrap();
+        let restored_db_file = NamedTempFile::new().unwrap();
+        let temp_vault = tempfile::tempdir().unwrap();
+        let temp_restore_vault = tempfile::tempdir().unwrap();
+
+        let original_db_key = [0x77u8; 32];
+        let backup_passphrase = "cross-environment-recovery-passphrase-2026!";
+
+        // 1. Create source database with custom random key
+        {
+            let db = Database::open(db_file.path(), &original_db_key).unwrap();
+            let acc = Account::new("Offshore Vault", AccountType::Asset, AccountSubtype::BankAccount, None);
+            db.create_account(&acc).unwrap();
+            assert!(db.integrity_check().unwrap());
+        }
+
+        // Create sample vault file
+        std::fs::write(temp_vault.path().join("doc1.pdf"), b"%PDF-1.7 encrypted mock").unwrap();
+
+        // 2. Create full backup embedding the database key inside the Argon2id envelope
+        let written = create_full_backup_file_with_key(
+            db_file.path(),
+            Some(temp_vault.path()),
+            backup_file.path(),
+            backup_passphrase,
+            Some(original_db_key),
+        )
+        .unwrap();
+        assert!(written > 0);
+
+        // 3. Restore backup into simulated fresh environment (no prior knowledge of db_key)
+        let res = restore_full_backup_file_with_key(
+            backup_file.path(),
+            restored_db_file.path(),
+            Some(temp_restore_vault.path()),
+            backup_passphrase,
+        )
+        .unwrap();
+
+        assert_eq!(res.db_key, Some(original_db_key));
+        assert!(temp_restore_vault.path().join("doc1.pdf").exists());
+
+        // 4. Open restored database using key recovered from backup
+        let recovered_key = res.db_key.expect("must contain db_key");
+        let restored_db = Database::open(restored_db_file.path(), &recovered_key).unwrap();
+        assert!(restored_db.integrity_check().unwrap());
+        let accounts = restored_db.list_accounts().unwrap();
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].name, "Offshore Vault");
     }
 }
