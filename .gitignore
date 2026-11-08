@@ -1,6 +1,7 @@
 # Rust Build Artifacts
 /target/
 /target_debian12/
+/build_env_debian12/
 **/*.rs.bk
 
 # Cargo

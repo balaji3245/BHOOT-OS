@@ -25,7 +25,7 @@ SERIAL_LOG_1 = os.path.join(DISPOSABLE_DIR, "boot1_serial.log")
 SERIAL_LOG_2 = os.path.join(DISPOSABLE_DIR, "boot2_serial.log")
 OVMF_PATH = "/usr/share/OVMF/OVMF_CODE_4M.fd"
 
-TOTAL_SECTORS = 121241600
+TOTAL_SECTORS = 121145344
 SECTOR_SIZE = 512
 
 

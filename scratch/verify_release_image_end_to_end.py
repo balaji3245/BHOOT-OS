@@ -26,7 +26,7 @@ OVMF_PATH = "/usr/share/OVMF/OVMF_CODE_4M.fd"
 QMP_SOCK = "/tmp/qmp_release_test.sock"
 SCREENSHOT_DIR = os.path.join(ROOT_DIR, "reports/screenshots")
 
-TOTAL_SECTORS = 121241600
+TOTAL_SECTORS = 121145344
 SECTOR_SIZE = 512
 
 def log(msg):
@@ -276,16 +276,44 @@ def main():
         if '"status":"ok"' not in health:
             raise RuntimeError(f"Health check failed: {health}")
 
-        # Stage 5: In-Browser GUI Lock Screen Verification
+        # Check initial security status: must be unenrolled
+        rc, sec_status = exec_in_guest(child, "curl -s http://127.0.0.1:1420/api/security/status")
+        log(f"Initial Security Status (rc={rc}): {sec_status}")
+        assert '"auth_enrolled":false' in sec_status, f"Expected unenrolled state, got: {sec_status}"
+        log("  [PASS] Initial state confirmed: unenrolled (fails closed)")
+
+        # Verify unenrolled requests fail closed with HTTP 401
+        rc, unauth_resp = exec_in_guest(child, "curl -i -s http://127.0.0.1:1420/api/accounts | head -n 5")
+        log(f"Unenrolled Protected Access Attempt (rc={rc}):\n{unauth_resp}")
+        assert "401" in unauth_resp, f"Expected 401 Unauthorized for unenrolled state, got: {unauth_resp}"
+        log("  [PASS] Unenrolled protected API fails closed (401 Unauthorized)")
+
+        # Stage 5: In-Browser GUI Setup & Lock Screen Verification
         time.sleep(5)
-        log("Capturing BHOOT financial lock screen rendered in browser...")
+        log("Capturing BHOOT First-Owner Master PIN Enrollment screen rendered in browser...")
+        qmp.screendump(os.path.join(SCREENSHOT_DIR, "04_bhoot_enrollment_screen.png"))
+
+        # Enroll master PIN: "748192"
+        owner_pin = "748192"
+        log(f"Enrolling First-Owner Master PIN '{owner_pin}' via API...")
+        rc, enroll_resp = exec_in_guest(child, f"curl -i -s -X POST http://127.0.0.1:1420/api/auth/enroll -H 'Content-Type: application/json' -d '{{\"pin\":\"{owner_pin}\",\"confirm_pin\":\"{owner_pin}\"}}'")
+        log(f"Enrollment response (rc={rc}):\n{enroll_resp}")
+        assert "200" in enroll_resp, f"Enrollment failed: {enroll_resp}"
+        log("  [PASS] Master PIN enrolled successfully")
+
+        # Lock the session to test graphical lock screen
+        log("Locking session to verify Graphical Lock Screen...")
+        exec_in_guest(child, "curl -s -X POST http://127.0.0.1:1420/api/auth/lock")
+        time.sleep(4)
         qmp.screendump(os.path.join(SCREENSHOT_DIR, "04_bhoot_lock_screen.png"))
 
-        # Stage 6: Unlock Graphical UI via QMP Key Events (PIN: 1234 + Enter)
-        log("Activating kiosk focus and submitting PIN '1234' and Enter to kiosk browser via QMP...")
+        # Stage 6: Unlock Graphical UI via QMP Key Events (PIN: 748192 + Enter)
+        log(f"Activating kiosk focus and submitting enrolled PIN '{owner_pin}' and Enter to kiosk browser via QMP...")
         qmp.click_screen()
         time.sleep(0.5)
-        qmp.send_keys(['1', '2', '3', '4', 'ret'], delay=0.25)
+        for digit in owner_pin:
+            qmp.send_keys([digit], delay=0.2)
+        qmp.send_keys(['ret'], delay=0.25)
         time.sleep(5)
         log("Capturing Dashboard view screenshot...")
         qmp.screendump(os.path.join(SCREENSHOT_DIR, "05_dashboard_view.png"))
@@ -323,12 +351,12 @@ def main():
         log("Waiting 62 seconds for PIN lockout cooldown to expire...")
         time.sleep(62)
 
-        rc, out3 = exec_in_guest(child, "curl -i -s -X POST http://127.0.0.1:1420/api/auth/unlock -H 'Content-Type: application/json' -d '{\"pin\":\"1234\"}' | head -n 5")
+        rc, out3 = exec_in_guest(child, f"curl -i -s -X POST http://127.0.0.1:1420/api/auth/unlock -H 'Content-Type: application/json' -d '{{\"pin\":\"{owner_pin}\"}}' | head -n 5")
         log(f"Test 3 - Post-cooldown Authentication (rc={rc}):\n{out3}")
         assert "200" in out3, f"Test 3 FAILED: Expected 200 OK after cooldown, got:\n{out3}"
 
         # Extract session token cleanly
-        rc, unlock_json = exec_in_guest(child, "curl -s -X POST http://127.0.0.1:1420/api/auth/unlock -H 'Content-Type: application/json' -d '{\"pin\":\"1234\"}'")
+        rc, unlock_json = exec_in_guest(child, f"curl -s -X POST http://127.0.0.1:1420/api/auth/unlock -H 'Content-Type: application/json' -d '{{\"pin\":\"{owner_pin}\"}}'")
         m_tok = re.search(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', unlock_json)
         if not m_tok:
             raise RuntimeError(f"Failed to extract session token from: {unlock_json}")
@@ -389,7 +417,7 @@ def main():
         log("  [PASS] Test 8: Session lock strictly revokes token; unauthorized access blocked (401)")
 
         # 9. Re-authentication & Fresh Token Generation
-        rc, unlock2 = exec_in_guest(child, "curl -s -X POST http://127.0.0.1:1420/api/auth/unlock -H 'Content-Type: application/json' -d '{\"pin\":\"1234\"}'")
+        rc, unlock2 = exec_in_guest(child, f"curl -s -X POST http://127.0.0.1:1420/api/auth/unlock -H 'Content-Type: application/json' -d '{{\"pin\":\"{owner_pin}\"}}'")
         m_tok2 = re.search(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', unlock2)
         assert m_tok2 and m_tok2.group(0) != token, f"Test 9 FAILED: Token rotation failed: {unlock2}"
         token2 = m_tok2.group(0)
@@ -407,8 +435,28 @@ def main():
         assert "200" in restore_out, f"Test 11 FAILED: Expected 200 OK on restore, got:\n{restore_out}"
         log("  [PASS] Test 11: Encrypted backup restored and verified successfully")
 
+        # 12. Service Restart & Persistent Authentication Verification
+        log("Testing credential and lockout state persistence across service restart...")
+        rc, _ = exec_in_guest(child, "systemctl restart bhoot-desktop.service")
+        time.sleep(3)
+
+        rc, post_restart_status = exec_in_guest(child, "curl -s http://127.0.0.1:1420/api/security/status")
+        log(f"Test 12 - Security Status Post-Restart (rc={rc}): {post_restart_status}")
+        assert '"auth_enrolled":true' in post_restart_status, f"Test 12 FAILED: Enrollment state lost across restart: {post_restart_status}"
+        log("  [PASS] Test 12A: Enrollment status persisted across service restart")
+
+        rc, dup_resp = exec_in_guest(child, f"curl -i -s -X POST http://127.0.0.1:1420/api/auth/enroll -H 'Content-Type: application/json' -d '{{\"pin\":\"888888\",\"confirm_pin\":\"888888\"}}' | head -n 5")
+        log(f"Test 12 - Duplicate Enrollment Attempt Post-Restart (rc={rc}):\n{dup_resp}")
+        assert "409" in dup_resp, f"Test 12 FAILED: Duplicate enrollment allowed: {dup_resp}"
+        log("  [PASS] Test 12B: Duplicate enrollment rejected (HTTP 409 Conflict)")
+
+        rc, post_unlock = exec_in_guest(child, f"curl -i -s -X POST http://127.0.0.1:1420/api/auth/unlock -H 'Content-Type: application/json' -d '{{\"pin\":\"{owner_pin}\"}}' | head -n 5")
+        log(f"Test 12 - Post-Restart Unlock with Master PIN (rc={rc}):\n{post_unlock}")
+        assert "200" in post_unlock, f"Test 12 FAILED: Master PIN failed to unlock post-restart: {post_unlock}"
+        log("  [PASS] Test 12C: Master PIN successfully unlocked session post-service restart")
+
         log("====================================================================")
-        log(" [TASK 5 COMPLETE] All 11 in-guest regression tests PASSED 100%.")
+        log(" [TASK 5 COMPLETE] All 12 in-guest regression tests PASSED 100%.")
         log("====================================================================")
 
         # Clean shutdown

@@ -78,7 +78,7 @@ export const SecurityCenterView: React.FC<SecurityCenterViewProps> = ({ onLockSe
 
     setPinSubmitting(true);
     try {
-      await api.setPin(currentPin, newPin);
+      await api.setPin(currentPin, newPin, confirmPin);
       setPinSuccess('Master PIN updated and rehashed with Argon2id.');
       setCurrentPin('');
       setNewPin('');

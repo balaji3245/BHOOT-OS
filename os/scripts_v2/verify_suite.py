@@ -190,7 +190,7 @@ print("\n--- 6. Assembled Whole Disk Image Verification ---")
 disk_path = os.path.join(BUILD_REAL, "bhoot_disk_assembled.img")
 if os.path.isfile(disk_path):
     dsize = os.path.getsize(disk_path)
-    check("Disk image size matches 57.81 GiB geometry (62,075,699,200 bytes)", dsize == 62075699200, f"{dsize} bytes")
+    check("Disk image size matches 57.77 GiB HP USB geometry (62,026,416,128 bytes)", dsize == 62026416128, f"{dsize} bytes")
 
     sf_res = subprocess.run(["sfdisk", "--verify", disk_path], capture_output=True, text=True)
     check("GPT partition table has no errors", "No errors detected" in sf_res.stdout or sf_res.returncode == 0)
@@ -317,13 +317,13 @@ artifacts_meta = [
     },
     {
         "filename": "bhoot_recovery.img",
-        "description": "32 MiB ext4 offline disaster recovery image containing header backup and recovery tools",
+        "description": "4 GiB ext4 offline disaster recovery image containing header backup and recovery tools",
         "role": "recovery_partition",
         "hash_mode": "full"
     },
     {
         "filename": "bhoot_disk_assembled.img",
-        "description": "57.81 GiB whole sparse disk image with complete GPT table and all four partition payloads",
+        "description": "57.77 GiB whole sparse disk image with complete GPT table and all four partition payloads (HP USB boundary-aligned)",
         "role": "whole_disk_image",
         "hash_mode": "gpt_header_2m"
     }

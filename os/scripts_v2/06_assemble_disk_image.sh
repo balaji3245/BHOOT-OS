@@ -10,7 +10,7 @@ OS_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_REAL="$OS_DIR/build_real"
 CONFIG_DIR="$OS_DIR/config"
 
-TOTAL_SECTORS=121241600
+TOTAL_SECTORS=121145344
 SECTOR_SIZE=512
 TOTAL_BYTES=$(( TOTAL_SECTORS * SECTOR_SIZE ))
 
@@ -104,7 +104,7 @@ if [ -f "$BUILD_REAL/rootfs/usr/local/sbin/bhoot-unlock-recovery-key" ]; then
     chmod +x "$RECOVERY_STAGING/bhoot-unlock-recovery-key"
 fi
 
-truncate -s $(( 32 * 1024 * 1024 )) "$RECOVERY_IMG"
+truncate -s $(( 4096 * 1024 * 1024 )) "$RECOVERY_IMG"
 mkfs.ext4 -F -q -L "BHOOT_REC" -d "$RECOVERY_STAGING" "$RECOVERY_IMG"
 rm -rf "$RECOVERY_STAGING"
 echo "  Offline recovery payload created: $(stat -c %s "$RECOVERY_IMG") bytes"

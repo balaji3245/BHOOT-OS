@@ -244,4 +244,5 @@ export interface SecurityStatus {
   audit_chain_verified: boolean;
   offline_firewall_active: boolean;
   session_locked: boolean;
+  auth_enrolled: boolean;
 }

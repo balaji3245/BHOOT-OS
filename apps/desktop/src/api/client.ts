@@ -111,6 +111,19 @@ export const api = {
     return httpRequest<SecurityStatus>('GET', '/api/security/status');
   },
 
+  async enrollSession(pin: string, confirmPin: string): Promise<boolean> {
+    const res = await httpRequest<{ success: boolean; session_token?: string }>(
+      'POST',
+      '/api/auth/enroll',
+      { pin, confirm_pin: confirmPin }
+    );
+    if (res.success && res.session_token) {
+      setSessionToken(res.session_token);
+      return true;
+    }
+    return false;
+  },
+
   async unlockSession(pin: string): Promise<boolean> {
     try {
       const res = await httpRequest<{ success: boolean; session_token?: string }>(
@@ -136,10 +149,11 @@ export const api = {
     }
   },
 
-  async setPin(currentPin: string, newPin: string): Promise<void> {
+  async setPin(currentPin: string, newPin: string, confirmNewPin?: string): Promise<void> {
     await httpRequest('POST', '/api/auth/set-pin', {
       current_pin: currentPin,
       new_pin: newPin,
+      confirm_new_pin: confirmNewPin,
     });
   },
 

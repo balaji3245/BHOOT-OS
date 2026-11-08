@@ -174,12 +174,18 @@ dependencies = [
  "bhoot-crypto",
  "bhoot-db",
  "bhoot-vault",
+ "blake3",
  "chrono",
+ "hkdf",
+ "rand 0.8.8",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
+ "thiserror",
  "tiny_http",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

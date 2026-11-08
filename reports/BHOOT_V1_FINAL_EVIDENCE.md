@@ -14,7 +14,8 @@ This dossier documents the exhaustive, evidence-based verification of the final 
 
 ### Release Git Baseline
 - **Branch:** `remediation/full-product-integration`
-- **Head Commit:** `b0562734b52a76cfbb6d3130ebf58752d4a8bb68` (with final frontend shortcuts and libinput enablement staged)
+- **Head Commit:** `358a2cc7f0a735079a8d9da6db67d8f58b024ee5` (`chore(screenshots): remove obsolete screenshot filenames and keep canonical 01-06 series`)
+- **Working Tree:** 100% clean (`git status` reports 0 unstaged modifications, 0 untracked files)
 - **Target Architecture:** `x86_64` UEFI with OVMF firmware
 - **Target OS:** Debian 12 Bookworm (glibc 2.36-9+deb12u14)
 
@@ -31,9 +32,9 @@ All hashes were computed via SHA-256 across the complete payload streams:
 | **SquashFS System Image** | `os/build_real/filesystem.squashfs` | 317,407,232 B | `65c671ed530b2de5cf3c31be472cebbb7793e153b8986fc1541066f75d1bcc7e` |
 | **EFI System Partition (ESP)** | `os/build_real/bhoot_esp.img` | 1,073,741,824 B | `aa7955c073de04cb4094fa3e89ea2e240e56bbd9a70d0dcd825c344edaee0d6e` |
 | **System Ext4 Partition** | `os/build_real/bhoot_system_ext4.img` | 4,294,967,296 B | `f8ae2389e164537a57466e2bd97f743f8ae89baea596c1e47afbc18e2ad2617e` |
-| **Offline Recovery Partition** | `os/build_real/bhoot_recovery.img` | 33,554,432 B | `ede114799650e1c1a9d796ef2724a6043b3e7c7b831c8762b0bfc46ef3d10aa0` |
+| **Offline Recovery Partition** | `os/build_real/bhoot_recovery.img` | 33,554,432 B | `0d80f246361b48d1510e3b16bae0dabf3b71f91bfcfa86d4ec93efc8a2548129` |
 | **Detached LUKS Header Backup** | `os/build_real/bhoot_luks_header.backup` | 16,777,216 B | `59032c69328d83f7bb53d0687ac9ecf7d1f6cc8ac7e983b00dfb146744a02577` |
-| **Assembled Disk Image** | `os/build_real/bhoot_disk_assembled.img` | 62,075,699,200 B | `1e2912f08fec5f4c525877425eca66820332a6f81260b488db427f0eda783e63` |
+| **Assembled Disk Image** | `os/build_real/bhoot_disk_assembled.img` | 62,026,416,128 B | `7ae7b06a495e7345066554bbc0d31df22167fec0cbc0a8daac713dfa24983fc1` |
 
 ### Binary Identity Verification
 ```text
@@ -82,7 +83,7 @@ $ readelf -V os/build_real/rootfs/usr/local/bin/bhoot-desktop | grep -E "GLIBC_2
 Forensic inspection of the assembled disk image (`os/build_real/bhoot_disk_assembled.img`):
 
 ```text
-Disk os/build_real/bhoot_disk_assembled.img: 57.81 GiB, 62075699200 bytes, 121241600 sectors
+Disk os/build_real/bhoot_disk_assembled.img: 57.77 GiB, 62026416128 bytes, 121145344 sectors
 Units: sectors of 1 * 512 = 512 bytes
 Sector size (logical/physical): 512 bytes / 512 bytes
 I/O size (minimum/optimal): 512 bytes / 512 bytes
@@ -101,6 +102,18 @@ bhoot_disk_assembled.img4        111151104 119539711   8388608   4G Linux filesy
 - **Partition 2 (BHOOT_SYSTEM):** Starts at Sector 2099200 (Offset 1025 MiB). Ext4 Superblock Magic `0xef53` verified. UUID: `b8007001-0002-4000-8000-000000000002`.
 - **Partition 3 (BHOOT_DATA):** Starts at Sector 10487808 (Offset 5121 MiB). LUKS2 Magic `4c 55 4b 53 ba be` verified. Argon2id PBKDF. UUID: `b8007001-0003-4000-8000-000000000003`.
 - **Partition 4 (BHOOT_RECOVERY):** Starts at Sector 111151104 (Offset 54273 MiB). Ext4 Superblock Magic `0xef53` verified. UUID: `b8007001-0004-4000-8000-000000000004`.
+- **Unallocated Margin:** Sectors 119539712 to 121145310 (`1,605,599 sectors` / `783.98 MiB`) unallocated wear-leveling reserve.
+- **Secondary GPT Backup:** Sectors 121145311 to 121145343 at the exact physical end of the disk.
+
+### Direct Boot Verification of Exact Assembled Disk Image
+The release disk image `os/build_real/bhoot_disk_assembled.img` was directly booted in QEMU under virtualized UEFI firmware (OVMF) with `-snapshot` to verify cold boot execution:
+
+```text
+Booting assembled HP USB image directly in QEMU UEFI (snapshot mode)...
+[PASS] Stage 1: UEFI and GRUB boot reached (idx=0)
+[PASS] Stage 2: Kernel & initramfs booted. LUKS2 passphrase prompt reached for /dev/vda3.
+[PASS] Direct boot of HP USB assembled image verified successfully!
+```
 
 ---
 
@@ -369,9 +382,9 @@ All 6 screenshots were captured directly from the guest framebuffer via QMP `scr
 ```text
 $ sha256sum reports/screenshots/*.png
 fa2d7933af5a43b01e6f297bc7901ea2148bfa07e267cf6aba1cf4adce57ed23  reports/screenshots/01_uefi_grub_boot.png
-9bb83dcc3addacc8d7fd42015ba45b877b0f95f5e1031f76600d7ddee96b5bfc  reports/screenshots/02_luks_passphrase_prompt.png
-ff5fdfa773f1e2fc4aa5cc3ea85dd558e539ee5f84dfd048cda4534e13025a8a  reports/screenshots/03_firstboot_setup.png
-9c62a41f06c12c50f2cca19b92a7f109014d086c2a65a24b692b8b75a64eeb26  reports/screenshots/04_bhoot_lock_screen.png
+23377e3b30a8aca287faeb5508e1eb41c2ada8c6b8a83624e1ac11c2d44f85e5  reports/screenshots/02_luks_passphrase_prompt.png
+adc95ec8eb7418a3dff6a2841f99b3aca435e05f355fa468eaf8d5d96e768cda  reports/screenshots/03_firstboot_setup.png
+51125b52e7a7023eb49c20f4e83ef213a9764c0b51274461bfbcd04a1ed4f65a  reports/screenshots/04_bhoot_lock_screen.png
 9832892c622bd23ebc0892d3d95551bdee7dbb0d172046edff8cbce4baf99280  reports/screenshots/05_dashboard_view.png
 8febd34f3be90f4c68e921ff4d15af86108bab94820df5d7438e6e318f991d0a  reports/screenshots/06_transactions_view.png
 ```
@@ -379,9 +392,9 @@ ff5fdfa773f1e2fc4aa5cc3ea85dd558e539ee5f84dfd048cda4534e13025a8a  reports/screen
 | Screenshot | Resolution | File Size | Unique Colors | Content Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `01_uefi_grub_boot.png` | 1024x768 | 8,923 B | 3 | OVMF UEFI GRUB bootloader menu with BHOOT OS and Recovery options |
-| `02_luks_passphrase_prompt.png` | 1024x768 | 37,017 B | 2 | Early-boot plymouth/initramfs cryptsetup LUKS passphrase prompt |
-| `03_firstboot_setup.png` | 1280x800 | 28,152 B | 2 | First-boot provisioning prompt configuring Diceware master passphrase |
-| `04_bhoot_lock_screen.png` | 1280x800 | 21,189 B | 253 | Full monochrome Lock screen rendered in browser kiosk with Lock icon & PIN box |
+| `02_luks_passphrase_prompt.png` | 1024x768 | 36,361 B | 2 | Early-boot plymouth/initramfs cryptsetup LUKS passphrase prompt |
+| `03_firstboot_setup.png` | 1280x800 | 28,091 B | 2 | First-boot provisioning prompt configuring Diceware master passphrase |
+| `04_bhoot_lock_screen.png` | 1280x800 | 21,180 B | 253 | Full monochrome Lock screen rendered in browser kiosk with Lock icon & PIN box |
 | `05_dashboard_view.png` | 1280x800 | 22,218 B | 506 | Main Financial Dashboard showing Net Worth, Cashflow, and Account Cards |
 | `06_transactions_view.png` | 1280x800 | 22,234 B | 506 | Transactions view with double-entry ledger postings and debit/credit columns |
 

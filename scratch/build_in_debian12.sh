@@ -33,9 +33,6 @@ unshare -U -p -f -r -m sh -c "
         cargo --version
 
         cd /workspace
-        echo \"Cleaning previous debian12 target...\"
-        rm -rf target_debian12
-
         echo \"Building workspace in --release mode against Debian 12 native libraries...\"
         CARGO_TARGET_DIR=/workspace/target_debian12 cargo build --release --workspace
 

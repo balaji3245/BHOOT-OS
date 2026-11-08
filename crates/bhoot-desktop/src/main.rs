@@ -1,5 +1,8 @@
 use bhoot_db::Database;
+use bhoot_desktop::db_key::resolve_or_provision_database_key;
 use bhoot_desktop::server::{handle_request, run_server, seed_starter_data, ServerState};
+use rand::rngs::OsRng;
+use rand::RngCore;
 use std::env;
 use std::fs;
 use std::io::{Read, Write};
@@ -10,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tiny_http::Server;
+use zeroize::Zeroizing;
 
 fn print_usage() {
     println!("BHOOT Desktop Application Server v1.0.0");
@@ -18,6 +22,7 @@ fn print_usage() {
     println!("Options:");
     println!("  --port <PORT>       Port to bind (default: 1420)");
     println!("  --db <PATH>         Path to SQLCipher database (default: /var/bhoot/data/bhoot.db)");
+    println!("  --key-file <PATH>   Path to wrapped database key file (default: /var/bhoot/system/db_key.wrapped)");
     println!("  --vault-dir <PATH>  Path to document vault storage (default: /var/bhoot/vault)");
     println!("  --test-run          Execute non-interactive self-test and exit");
     println!("  --help              Display this help message");
@@ -26,8 +31,10 @@ fn print_usage() {
 fn run_self_test() -> Result<(), Box<dyn std::error::Error>> {
     println!("[TEST] Starting BHOOT Desktop comprehensive self-test harness...");
 
-    // 1. Initialize encrypted database & ServerState
-    let test_key = [0x42u8; 32];
+    // 1. Initialize encrypted database with ephemeral random test key & ServerState
+    let mut test_key_raw = [0u8; 32];
+    OsRng.fill_bytes(&mut test_key_raw);
+    let test_key = Zeroizing::new(test_key_raw);
     let temp_dir = tempfile::tempdir()?;
     let temp_db_path = temp_dir.path().join("test.db");
     let temp_vault_dir = temp_dir.path().join("vault");
@@ -40,8 +47,7 @@ fn run_self_test() -> Result<(), Box<dyn std::error::Error>> {
         db,
         temp_db_path,
         temp_vault_dir,
-        test_key,
-        "1234",
+        *test_key,
     ));
 
     // 2. Bind server to random ephemeral port
@@ -126,17 +132,33 @@ fn run_self_test() -> Result<(), Box<dyn std::error::Error>> {
     assert!(resp.contains(r#""airgap":true"#));
     println!("  -> PASS (/api/health verified)");
 
-    // Verify rejection while session is locked
+    // Verify rejection while application is unenrolled
     let (lock_status, _) = http_request("GET", "/api/accounts", None)?;
-    assert_eq!(lock_status, 401, "Protected route MUST be rejected when session is locked");
+    assert_eq!(lock_status, 401, "Protected route MUST be rejected when unenrolled");
 
-    // Authenticate and unlock session with PIN
-    let (status, unlock_resp) = http_request("POST", "/api/auth/unlock", Some(r#"{"pin":"1234"}"#))?;
-    assert_eq!(status, 200, "PIN unlock should return 200 OK");
-    let resp_body = unlock_resp.lines().last().unwrap_or("{}");
-    let unlock_json: serde_json::Value = serde_json::from_str(resp_body)?;
-    let token = unlock_json["session_token"].as_str().ok_or("Missing token in unlock response")?;
+    // Verify unlock rejected while unenrolled
+    let (unlock_unenrolled_status, _) = http_request("POST", "/api/auth/unlock", Some(r#"{"pin":"748192"}"#))?;
+    assert_eq!(unlock_unenrolled_status, 400, "Unlock must fail when unenrolled");
+
+    // Verify weak PIN enrollment rejected
+    let (weak_enroll_status, _) = http_request("POST", "/api/auth/enroll", Some(r#"{"pin":"111111","confirm_pin":"111111"}"#))?;
+    assert_eq!(weak_enroll_status, 400, "Weak PIN enrollment must be rejected");
+
+    // Verify confirmation mismatch enrollment rejected
+    let (mismatch_enroll_status, _) = http_request("POST", "/api/auth/enroll", Some(r#"{"pin":"748192","confirm_pin":"999999"}"#))?;
+    assert_eq!(mismatch_enroll_status, 400, "Mismatched PIN enrollment must be rejected");
+
+    // First-owner enrollment with valid secure PIN
+    let (enroll_status, enroll_resp) = http_request("POST", "/api/auth/enroll", Some(r#"{"pin":"748192","confirm_pin":"748192"}"#))?;
+    assert_eq!(enroll_status, 200, "Valid enrollment should return 200 OK");
+    let resp_body = enroll_resp.lines().last().unwrap_or("{}");
+    let enroll_json: serde_json::Value = serde_json::from_str(resp_body)?;
+    let token = enroll_json["session_token"].as_str().ok_or("Missing token in enroll response")?;
     *active_token.lock().unwrap() = Some(token.to_string());
+
+    // Duplicate enrollment attempt must return 409 Conflict
+    let (dup_status, _) = http_request("POST", "/api/auth/enroll", Some(r#"{"pin":"748192","confirm_pin":"748192"}"#))?;
+    assert_eq!(dup_status, 409, "Duplicate enrollment must return 409 Conflict");
 
     // 7. Test /api/accounts (GET)
     println!("[TEST 5/15] Checking GET /api/accounts...");
@@ -208,11 +230,16 @@ fn run_self_test() -> Result<(), Box<dyn std::error::Error>> {
 
     // 14. Test Authentication & PIN Lock
     println!("[TEST 12/15] Checking Authentication & Argon2id PIN verification...");
+    // Lock session
+    let (lock_status, _) = http_request("POST", "/api/auth/lock", None)?;
+    assert_eq!(lock_status, 200);
+
     // Wrong PIN
     let (status, _) = http_request("POST", "/api/auth/unlock", Some(r#"{"pin":"wrong_pin"}"#))?;
     assert_eq!(status, 401, "Wrong PIN must return 401 Unauthorized");
-    // Correct PIN
-    let (status, resp) = http_request("POST", "/api/auth/unlock", Some(r#"{"pin":"1234"}"#))?;
+
+    // Correct enrolled PIN
+    let (status, resp) = http_request("POST", "/api/auth/unlock", Some(r#"{"pin":"748192"}"#))?;
     assert_eq!(status, 200, "Correct PIN must return 200 OK");
     assert!(resp.contains("session_token"));
     let resp_body = resp.lines().last().unwrap_or("{}");
@@ -257,23 +284,11 @@ fn run_self_test() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn decode_hex_32(s: &str) -> Result<[u8; 32], String> {
-    let s = s.trim();
-    if s.len() != 64 {
-        return Err("Hex string must be exactly 64 characters (32 bytes)".into());
-    }
-    let mut bytes = [0u8; 32];
-    for (i, byte) in bytes.iter_mut().enumerate() {
-        let chunk = &s[i * 2..i * 2 + 2];
-        *byte = u8::from_str_radix(chunk, 16).map_err(|e| format!("Invalid hex: {e}"))?;
-    }
-    Ok(bytes)
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
     let mut port: u16 = 1420;
     let mut db_path = PathBuf::from("/var/bhoot/data/bhoot.db");
+    let mut key_file: Option<PathBuf> = None;
     let mut vault_dir = PathBuf::from("/var/bhoot/vault");
     let mut test_run = false;
 
@@ -289,6 +304,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--db" => {
                 if i + 1 < args.len() {
                     db_path = PathBuf::from(&args[i + 1]);
+                    i += 1;
+                }
+            }
+            "--key-file" => {
+                if i + 1 < args.len() {
+                    key_file = Some(PathBuf::from(&args[i + 1]));
                     i += 1;
                 }
             }
@@ -318,13 +339,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return run_self_test();
     }
 
-    // Default or configured database key
-    let key = if let Ok(hex_key) = env::var("BHOOT_DB_KEY") {
-        decode_hex_32(&hex_key).map_err(|e| format!("Invalid BHOOT_DB_KEY: {e}"))?
-    } else {
-        // Fallback production default key
-        [0x5Au8; 32]
-    };
+    // Resolve or provision persistent 256-bit database encryption key
+    let key = resolve_or_provision_database_key(&db_path, key_file.as_deref())
+        .map_err(|e| format!("Database key resolution failed: {e}"))?;
 
     // Ensure database and vault directories exist
     if let Some(parent) = db_path.parent() {
@@ -340,16 +357,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = match Database::open(&db_path, &key) {
         Ok(db) => db,
         Err(e) => {
-            eprintln!("[BHOOT WARNING] Could not open database at {}: {e}", db_path.display());
-            eprintln!("[BHOOT WARNING] Falling back to isolated in-memory encrypted database.");
-            Database::open_in_memory(&key)?
+            eprintln!("[BHOOT FATAL] Failed to authenticate or open encrypted database at {}: {e}", db_path.display());
+            eprintln!("[BHOOT FATAL] Missing, incorrect, or corrupted key material. Refusing to proceed. Failing closed.");
+            return Err(format!("Database authentication failed: {e}").into());
         }
     };
 
     seed_starter_data(&db)?;
 
-    let initial_pin = env::var("BHOOT_MASTER_PIN").unwrap_or_else(|_| "1234".to_string());
-    let state = Arc::new(ServerState::new(db, db_path, vault_dir, key, &initial_pin));
+    let state = Arc::new(ServerState::new(db, db_path, vault_dir, *key));
+
+    if !state.is_enrolled.load(Ordering::SeqCst) {
+        if let Ok(preconfigured_pin) = env::var("BHOOT_MASTER_PIN") {
+            if !preconfigured_pin.is_empty() {
+                let _ = state.enroll_owner_pin(&preconfigured_pin, &preconfigured_pin);
+            }
+        }
+    }
 
     run_server(port, state)?;
 

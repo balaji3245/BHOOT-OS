@@ -19,6 +19,6 @@ start=10487808, size=100663296, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=
 # Emergency rescue utilities, memory diagnostic tools, detached header recovery
 start=111151104, size=8388608, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=B8007001-0004-4000-8000-000000000004, name="BHOOT_RECOVERY"
 
-# Remaining ~831 MiB (1,701,888 sectors) is deliberately left unallocated as
+# Remaining ~784 MiB (1,605,599 sectors) is deliberately left unallocated as
 # over-provisioning reserve for USB flash controller wear-leveling and bad-block retirement.
 

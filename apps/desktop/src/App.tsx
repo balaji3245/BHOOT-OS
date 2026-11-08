@@ -12,20 +12,29 @@ import { VaultView } from './views/VaultView';
 import { BackupRecoveryView } from './views/BackupRecoveryView';
 import { SecurityCenterView } from './views/SecurityCenterView';
 import { SettingsView } from './views/SettingsView';
-import { Lock, ShieldAlert } from 'lucide-react';
+import { Lock, ShieldAlert, KeyRound } from 'lucide-react';
 import { api } from './api/client';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabId>('dashboard');
   const [txModalOpen, setTxModalOpen] = useState(false);
   const [isLocked, setIsLocked] = useState(true); // Locked by default for zero-trust security
+  const [isEnrolled, setIsEnrolled] = useState<boolean | null>(null);
   const [pinInput, setPinInput] = useState('');
   const [lockError, setLockError] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
 
+  // First-owner enrollment state
+  const [enrollPin, setEnrollPin] = useState('');
+  const [enrollConfirmPin, setEnrollConfirmPin] = useState('');
+  const [enrollError, setEnrollError] = useState<string | null>(null);
+  const [isEnrolling, setIsEnrolling] = useState(false);
+
   const lastActivityRef = useRef<number>(Date.now());
   const pinInputRef = useRef<string>('');
   pinInputRef.current = pinInput;
+  const isEnrolledRef = useRef<boolean | null>(isEnrolled);
+  isEnrolledRef.current = isEnrolled;
 
   // Check initial security status & token validity
   useEffect(() => {
@@ -35,17 +44,38 @@ export const App: React.FC = () => {
         const token = sessionStorage.getItem('bhoot_session_token');
         const status = await api.getSecurityStatus();
         if (mounted) {
-          if (status.session_locked || !token) {
+          setIsEnrolled(Boolean(status.auth_enrolled));
+          if (!status.auth_enrolled) {
+            setIsLocked(true);
+          } else if (status.session_locked || !token) {
             setIsLocked(true);
           } else {
             setIsLocked(false);
           }
         }
       } catch {
-        if (mounted) setIsLocked(true);
+        if (mounted) {
+          setIsEnrolled(false);
+          setIsLocked(true);
+        }
       }
     };
     checkSecurity();
+
+    // Fast sync interval while unenrolled to transition as soon as setup completes
+    const syncInterval = setInterval(async () => {
+      if (!isEnrolledRef.current) {
+        try {
+          const status = await api.getSecurityStatus();
+          if (mounted && status.auth_enrolled) {
+            setIsEnrolled(true);
+            setIsLocked(true);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }, 1500);
 
     // Activity tracking & global navigation shortcuts
     const recordActivity = () => {
@@ -54,6 +84,13 @@ export const App: React.FC = () => {
 
     const handleKeyDown = (e: KeyboardEvent) => {
       recordActivity();
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+
+      if (isEnrolledRef.current === false) {
+        return;
+      }
+
       if (isLocked) {
         if (e.key === 'Enter') {
           doUnlock();
@@ -72,8 +109,6 @@ export const App: React.FC = () => {
         }
         return;
       }
-      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
       if (e.key === '2' || (e.altKey && e.key === '2') || e.key === 't') {
         setActiveTab('transactions');
       } else if (e.key === '1' || (e.altKey && e.key === '1') || e.key === 'd') {
@@ -101,6 +136,7 @@ export const App: React.FC = () => {
       window.removeEventListener('mousemove', recordActivity);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('click', recordActivity);
+      clearInterval(syncInterval);
       clearInterval(interval);
     };
   }, [isLocked]);
@@ -112,8 +148,8 @@ export const App: React.FC = () => {
     setLockError(false);
   };
 
-  const doUnlock = async () => {
-    const pin = pinInputRef.current;
+  const doUnlock = async (overridePin?: string) => {
+    const pin = (overridePin || pinInput || pinInputRef.current).trim();
     if (!pin) return;
     setIsAuthenticating(true);
     setLockError(false);
@@ -135,11 +171,120 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleUnlock = async (e: React.FormEvent) => {
+  const handleEnroll = async (e: React.FormEvent) => {
     e.preventDefault();
-    await doUnlock();
+    setEnrollError(null);
+
+    if (enrollPin !== enrollConfirmPin) {
+      setEnrollError('PIN confirmation does not match.');
+      return;
+    }
+    if (enrollPin.length < 6) {
+      setEnrollError('PIN must be at least 6 characters in length.');
+      return;
+    }
+
+    setIsEnrolling(true);
+    try {
+      const success = await api.enrollSession(enrollPin, enrollConfirmPin);
+      if (success) {
+        setIsEnrolled(true);
+        setIsLocked(false);
+        setEnrollPin('');
+        setEnrollConfirmPin('');
+        lastActivityRef.current = Date.now();
+      } else {
+        setEnrollError('Enrollment failed. Please check PIN strength.');
+      }
+    } catch (err: any) {
+      setEnrollError(err.message || 'Enrollment failed.');
+    } finally {
+      setIsEnrolling(false);
+    }
   };
 
+  const handleUnlock = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await doUnlock(pinInput);
+  };
+
+  // 1. Mandatory First-Owner PIN Enrollment Screen
+  if (isEnrolled === false) {
+    return (
+      <div className="fixed inset-0 z-50 bg-[#000000] flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-[#0d0d0d] border border-neutral-800 rounded-2xl p-8 space-y-6 shadow-2xl text-center">
+          <div className="w-16 h-16 rounded-full bg-neutral-900 border border-neutral-700 flex items-center justify-center text-white mx-auto shadow-inner">
+            <KeyRound className="w-8 h-8" />
+          </div>
+
+          <div>
+            <h2 className="text-xl font-bold tracking-tight text-white uppercase">BHOOT OS Setup</h2>
+            <p className="text-xs text-neutral-400 mt-1">
+              First-time setup required. Establish your master owner PIN to protect offline financial records.
+            </p>
+          </div>
+
+          <form onSubmit={handleEnroll} className="space-y-4 text-left">
+            <div>
+              <label className="block text-[11px] font-medium text-neutral-400 uppercase tracking-wider mb-1 text-center">
+                Create Master PIN
+              </label>
+              <input
+                type="password"
+                placeholder="Enter Master PIN (min 6 chars)"
+                value={enrollPin}
+                onChange={(e) => setEnrollPin(e.target.value)}
+                className="w-full bg-[#141414] border border-neutral-800 focus:border-white text-center text-sm rounded-xl py-3 px-4 text-white placeholder-neutral-600 focus:outline-none tracking-widest transition"
+                autoFocus
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-medium text-neutral-400 uppercase tracking-wider mb-1 text-center">
+                Confirm Master PIN
+              </label>
+              <input
+                type="password"
+                placeholder="Confirm Master PIN"
+                value={enrollConfirmPin}
+                onChange={(e) => setEnrollConfirmPin(e.target.value)}
+                className="w-full bg-[#141414] border border-neutral-800 focus:border-white text-center text-sm rounded-xl py-3 px-4 text-white placeholder-neutral-600 focus:outline-none tracking-widest transition"
+                required
+              />
+            </div>
+
+            <p className="text-[10px] text-neutral-500 text-center">
+              Policy: Min 6 chars. No repetitive (111111) or sequential (123456) patterns.
+            </p>
+
+            {enrollError && (
+              <div className="flex items-center justify-center space-x-1.5 text-xs text-red-400 text-center">
+                <ShieldAlert className="w-4 h-4 flex-shrink-0" />
+                <span>{enrollError}</span>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={isEnrolling}
+              className="w-full py-3 bg-white hover:bg-neutral-200 disabled:opacity-50 text-black font-semibold text-xs tracking-wider uppercase rounded-xl shadow transition"
+            >
+              {isEnrolling ? 'Enrolling & Hashing (Argon2id)...' : 'Complete Setup & Unlock'}
+            </button>
+          </form>
+
+          <div className="pt-2 border-t border-neutral-900">
+            <span className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest">
+              Argon2id Key Derivation • Persistent SQLCipher Storage
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Standard Session Lock Screen (When Enrolled)
   if (isLocked) {
     return (
       <div className="fixed inset-0 z-50 bg-[#000000] flex items-center justify-center p-4">
