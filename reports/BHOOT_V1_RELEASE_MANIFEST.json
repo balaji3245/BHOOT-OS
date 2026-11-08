@@ -8,9 +8,13 @@
   "libc_version": "glibc 2.36",
   "audit_verdict": "PASS",
   "safety_attestation": {
-    "physical_disks_modified": false,
-    "physical_usb_deployed": false,
-    "deploy_physical_usb_executed": false,
+    "physical_disks_modified": true,
+    "physical_usb_deployed": true,
+    "target_device": "/dev/sda",
+    "target_serial": "070D29709B8E4F65",
+    "deploy_physical_usb_executed": true,
+    "physical_readback_sha256_verified": true,
+    "host_nvme_modified": false,
     "host_uefi_modified": false,
     "airgap_integrity": "verified"
   },

@@ -121,3 +121,4 @@ sudo cmp -n 62026416128 os/build_real/bhoot_disk_assembled.img /dev/sda
 
 ## 6. Release Sign-Off
 All software, security, cryptographic, and operating system release gates for BHOOT v1.0 have been met.
+
