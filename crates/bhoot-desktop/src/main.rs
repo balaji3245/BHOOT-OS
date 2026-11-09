@@ -161,20 +161,30 @@ fn run_self_test() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(dup_status, 409, "Duplicate enrollment must return 409 Conflict");
 
     // 7. Test /api/accounts (GET)
-    println!("[TEST 5/15] Checking GET /api/accounts...");
+    println!("[TEST 5/18] Checking GET /api/accounts...");
     let (status, resp) = http_request("GET", "/api/accounts", None)?;
     assert_eq!(status, 200);
     assert!(resp.contains("HDFC Savings Bank"));
     assert!(resp.contains("Zerodha Demat & Trading"));
-    println!("  -> PASS (GET /api/accounts verified)");
+    assert!(resp.contains("balance_paisa"));
+    println!("  -> PASS (GET /api/accounts verified with balance_paisa)");
 
     // 8. Test /api/accounts (POST mutation)
-    println!("[TEST 6/15] Checking POST /api/accounts (Create Account)...");
+    println!("[TEST 6/18] Checking POST /api/accounts (Create Account)...");
     let new_acc_json = r#"{"name":"SBI Emergency Fund","account_type":"Asset","subtype":"BankAccount","currency":"INR","description":"Liquid reserve fund"}"#;
     let (status, resp) = http_request("POST", "/api/accounts", Some(new_acc_json))?;
     assert_eq!(status, 201, "Account creation should return 201 Created");
     assert!(resp.contains("SBI Emergency Fund"));
-    println!("  -> PASS (POST /api/accounts verified)");
+    let created_acc: serde_json::Value = serde_json::from_str(resp.lines().last().unwrap_or("{}"))?;
+    let created_acc_id = created_acc["id"].as_str().unwrap();
+
+    // Test POST /api/accounts/update
+    let update_acc_json = format!(
+        r#"{{"account_id":"{created_acc_id}","name":"SBI Reserve Fund","description":"Updated reserve account"}}"#
+    );
+    let (up_status, _) = http_request("POST", "/api/accounts/update", Some(&update_acc_json))?;
+    assert_eq!(up_status, 200, "Account update should return 200 OK");
+    println!("  -> PASS (POST /api/accounts & update verified)");
 
     // 9. Test /api/transactions (GET)
     println!("[TEST 7/15] Checking GET /api/transactions...");
@@ -256,7 +266,7 @@ fn run_self_test() -> Result<(), Box<dyn std::error::Error>> {
     println!("  -> PASS (/api/vault/verify verified)");
 
     // 16. Test Backup Creation API
-    println!("[TEST 14/15] Checking POST /api/backup/create...");
+    println!("[TEST 14/18] Checking POST /api/backup/create...");
     let backup_dest = temp_dir.path().join("backup.bhoot");
     let backup_req = format!(
         r#"{{"passphrase":"master-secure-backup-passphrase-2026","destination_path":"{}"}}"#,
@@ -267,8 +277,34 @@ fn run_self_test() -> Result<(), Box<dyn std::error::Error>> {
     assert!(resp.contains("bytes_written"));
     println!("  -> PASS (POST /api/backup/create verified)");
 
-    // 17. Test 404 Handling
-    println!("[TEST 15/15] Checking 404 handling...");
+    // 17. Test Persistent Settings (GET and POST)
+    println!("[TEST 15/18] Checking Settings GET & POST persistence...");
+    let new_settings = r#"{"currency":"INR","theme":"dark","auto_lock_minutes":30,"offline_mode":true,"financial_year_start":"04-01"}"#;
+    let (s_post_status, s_post_resp) = http_request("POST", "/api/settings", Some(new_settings))?;
+    assert_eq!(s_post_status, 200);
+    assert!(s_post_resp.contains(r#""auto_lock_minutes":30"#));
+
+    let (s_get_status, s_get_resp) = http_request("GET", "/api/settings", None)?;
+    assert_eq!(s_get_status, 200);
+    assert!(s_get_resp.contains(r#""auto_lock_minutes":30"#));
+    println!("  -> PASS (Settings GET & POST persistence verified)");
+
+    // 18. Test Budget Creation & Deletion
+    println!("[TEST 16/18] Checking Budget Creation & Deletion...");
+    let budget_json = r#"{"name":"Q4 Expense Plan","period":"Quarterly","start_date":"2026-10-01T00:00:00Z","end_date":"2026-12-31T23:59:59Z","categories":[{"category":"LivingExpense","allocated_paisa":5000000,"alert_threshold_pct":80}]}"#;
+    let (b_status, b_resp) = http_request("POST", "/api/budgets", Some(budget_json))?;
+    assert_eq!(b_status, 200);
+    let b_val: serde_json::Value = serde_json::from_str(b_resp.lines().last().unwrap_or("{}"))?;
+    let b_id = b_val["id"].as_str().unwrap();
+
+    let del_json = format!(r#"{{"id":"{b_id}"}}"#);
+    let (del_status, del_resp) = http_request("POST", "/api/budgets/delete", Some(&del_json))?;
+    assert_eq!(del_status, 200);
+    assert!(del_resp.contains(r#""success":true"#));
+    println!("  -> PASS (Budget Creation & Deletion verified)");
+
+    // 19. Test 404 Handling
+    println!("[TEST 17/18] Checking 404 handling...");
     let (status, _) = http_request("GET", "/unknown/nonexistent/path", None)?;
     assert_eq!(status, 404);
     println!("  -> PASS (404 verified)");
@@ -278,7 +314,7 @@ fn run_self_test() -> Result<(), Box<dyn std::error::Error>> {
     let _ = server_handle.join();
 
     println!("========================================================================");
-    println!(" [TEST SUMMARY] All 15 BHOOT Desktop HTTP endpoints passed verification!");
+    println!(" [TEST SUMMARY] All 18 BHOOT Desktop HTTP endpoints passed verification!");
     println!("========================================================================");
 
     Ok(())

@@ -346,6 +346,24 @@ impl Database {
         Ok(())
     }
 
+    /// Update name and description of an existing account.
+    pub fn update_account_details(
+        &self,
+        id: AccountId,
+        name: &str,
+        description: Option<&str>,
+    ) -> Result<(), DbError> {
+        let now = Utc::now().to_rfc3339();
+        let rows = self.conn.execute(
+            "UPDATE accounts SET name = ?1, description = ?2, updated_at = ?3 WHERE id = ?4;",
+            params![name, description, now, id.to_string()],
+        )?;
+        if rows == 0 {
+            return Err(DbError::AccountNotFound(id.to_string()));
+        }
+        Ok(())
+    }
+
     // =========================================================================
     // TRANSACTION & POSTING REPOSITORY (DOUBLE-ENTRY ENGINE)
     // =========================================================================
@@ -1214,6 +1232,12 @@ impl Database {
         let spending = self.get_spending_by_category(budget.start_date, budget.end_date)?;
         let report = budget.evaluate_spending(&spending)?;
         Ok(Some(report))
+    }
+
+    /// Delete a budget by ID and cascade delete its category allocations.
+    pub fn delete_budget(&self, id: Uuid) -> Result<bool, DbError> {
+        let rows = self.conn.execute("DELETE FROM budgets WHERE id = ?1;", params![id.to_string()])?;
+        Ok(rows > 0)
     }
 
     // =========================================================================

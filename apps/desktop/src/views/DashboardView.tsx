@@ -11,6 +11,7 @@ import {
   ArrowRight,
   ShieldCheck,
   Plus,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface DashboardViewProps {
@@ -24,23 +25,28 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onOpen
   const [tradingSummary, setTradingSummary] = useState<TradingSummary | null>(null);
   const [recentTxs, setRecentTxs] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     async function loadData() {
       try {
-        const bs = await api.getBalanceSheet();
+        setErrorMsg(null);
+        const [bs, ts, txs] = await Promise.all([
+          api.getBalanceSheet(),
+          api.getTradingSummary(),
+          api.getTransactions(6, 0),
+        ]);
         const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString();
         const now = new Date().toISOString();
         const pnl = await api.getIncomeStatement(thirtyDaysAgo, now);
-        const ts = await api.getTradingSummary();
-        const txs = await api.getTransactions(6, 0);
 
         setBalanceSheet(bs);
         setIncomeStatement(pnl);
         setTradingSummary(ts);
         setRecentTxs(txs);
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to load dashboard data:', err);
+        setErrorMsg(err.message || 'Failed to load ledger data');
       } finally {
         setLoading(false);
       }
@@ -67,6 +73,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate, onOpen
 
   return (
     <div className="p-8 space-y-8 max-w-7xl mx-auto">
+      {errorMsg && (
+        <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg flex items-center space-x-2 text-xs text-red-400">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          <span>{errorMsg}</span>
+        </div>
+      )}
+
       {/* Hero Financial Summary Banner */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
         {/* Net Worth */}

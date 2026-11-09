@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api/client';
 import { Account, TradeRecord, TradeType, TradingSummary } from '../types';
 import { formatINR, formatBps, formatDate } from '../utils/format';
-import { Plus, Download, X } from 'lucide-react';
+import { Plus, Download, X, CheckCircle2, AlertTriangle } from 'lucide-react';
 
 export const TradingJournalView: React.FC = () => {
   const [trades, setTrades] = useState<TradeRecord[]>([]);
@@ -11,6 +11,9 @@ export const TradingJournalView: React.FC = () => {
   const [selectedBroker, setSelectedBroker] = useState<string>('');
   const [modalOpen, setModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
 
   // New Trade Form
   const [symbol, setSymbol] = useState('');
@@ -27,6 +30,7 @@ export const TradingJournalView: React.FC = () => {
 
   const loadData = async () => {
     try {
+      setErrorMsg(null);
       const trs = await api.getTrades();
       const sum = await api.getTradingSummary();
       const accs = await api.getAccounts();
@@ -35,8 +39,9 @@ export const TradingJournalView: React.FC = () => {
       setTrades(trs);
       setSummary(sum);
       setBrokers(brokerAccs);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to load trading journal:', err);
+      setErrorMsg(err.message || 'Failed to load trading journal');
     } finally {
       setLoading(false);
     }
@@ -59,13 +64,14 @@ export const TradingJournalView: React.FC = () => {
 
   const handleRecordTrade = async (e: React.FormEvent) => {
     e.preventDefault();
+    setModalError(null);
     if (!symbol.trim() || !grossRupees) return;
 
     setIsSubmitting(true);
     try {
       const brokerId = selectedBroker || brokers[0]?.id;
       if (!brokerId) {
-        alert('Please create or select an asset/broker account first in Chart of Accounts');
+        setModalError('Please create or select an asset/broker account first in Chart of Accounts');
         return;
       }
 
@@ -91,9 +97,11 @@ export const TradingJournalView: React.FC = () => {
       setSymbol('');
       setGrossRupees('');
       setOrderId('');
+      setSuccessMsg(`Trade for ${symbol.trim().toUpperCase()} recorded successfully.`);
+      setTimeout(() => setSuccessMsg(null), 3500);
       await loadData();
     } catch (err: any) {
-      alert(`Failed to record trade: ${err.message}`);
+      setModalError(`Failed to record trade: ${err.message}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -160,7 +168,10 @@ export const TradingJournalView: React.FC = () => {
           </button>
 
           <button
-            onClick={() => setModalOpen(true)}
+            onClick={() => {
+              setModalError(null);
+              setModalOpen(true);
+            }}
             className="flex items-center space-x-1.5 px-4 py-2 bg-white hover:bg-neutral-200 text-black text-xs font-semibold rounded-lg shadow-sm transition"
           >
             <Plus className="w-4 h-4" />
@@ -168,6 +179,26 @@ export const TradingJournalView: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {successMsg && (
+        <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg flex items-center space-x-2 text-xs text-emerald-400">
+          <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+          <span>{successMsg}</span>
+        </div>
+      )}
+
+      {errorMsg && (
+        <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg flex items-center space-x-2 text-xs text-red-400">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          <span>{errorMsg}</span>
+        </div>
+      )}
+
+      {brokers.length === 0 && (
+        <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl flex items-center justify-between text-xs text-amber-300">
+          <span>No broker or asset accounts available to associate trades. Create a Broker account in Chart of Accounts to enable trade logging.</span>
+        </div>
+      )}
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -300,6 +331,13 @@ export const TradingJournalView: React.FC = () => {
             </div>
 
             <form onSubmit={handleRecordTrade} className="space-y-4">
+              {modalError && (
+                <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg flex items-center space-x-2 text-xs text-red-400">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span>{modalError}</span>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-neutral-300 mb-1">Contract / Symbol</label>

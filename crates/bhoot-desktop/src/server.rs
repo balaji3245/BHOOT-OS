@@ -245,6 +245,54 @@ impl ServerState {
             }
         }
 
+        // 5. Initialize & query persistent app settings
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS app_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                currency TEXT NOT NULL,
+                theme TEXT NOT NULL,
+                auto_lock_minutes INTEGER NOT NULL,
+                offline_mode INTEGER NOT NULL,
+                financial_year_start TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );",
+            [],
+        );
+
+        let mut loaded_settings = AppSettings::default();
+        if let Ok(mut stmt) = conn.prepare("SELECT currency, theme, auto_lock_minutes, offline_mode, financial_year_start FROM app_settings WHERE id = 1") {
+            if let Ok(row) = stmt.query_row([], |r| {
+                let currency: String = r.get(0)?;
+                let theme: String = r.get(1)?;
+                let auto_lock_minutes: u32 = r.get(2)?;
+                let offline_mode_int: i64 = r.get(3)?;
+                let financial_year_start: String = r.get(4)?;
+                Ok(AppSettings {
+                    currency,
+                    theme,
+                    auto_lock_minutes,
+                    offline_mode: offline_mode_int != 0,
+                    financial_year_start,
+                })
+            }) {
+                loaded_settings = row;
+            } else {
+                let now_str = Utc::now().to_rfc3339();
+                let _ = conn.execute(
+                    "INSERT OR IGNORE INTO app_settings (id, currency, theme, auto_lock_minutes, offline_mode, financial_year_start, updated_at)
+                     VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6);",
+                    bhoot_db::rusqlite::params![
+                        loaded_settings.currency,
+                        loaded_settings.theme,
+                        loaded_settings.auto_lock_minutes,
+                        loaded_settings.offline_mode as i64,
+                        loaded_settings.financial_year_start,
+                        now_str
+                    ],
+                );
+            }
+        }
+
         let initial_token = Uuid::new_v4().to_string();
 
         Self {
@@ -261,7 +309,7 @@ impl ServerState {
             failed_pin_attempts: AtomicU32::new(failed_attempts),
             locked_until_unix: std::sync::atomic::AtomicI64::new(locked_until_unix),
             pin_mutex: Mutex::new(()),
-            settings: Mutex::new(AppSettings::default()),
+            settings: Mutex::new(loaded_settings),
         }
     }
 
@@ -533,6 +581,27 @@ pub struct UpdateAccountStatusRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct UpdateAccountDetailsRequest {
+    pub account_id: AccountId,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AccountWithBalance {
+    pub id: AccountId,
+    pub name: String,
+    pub account_type: AccountType,
+    pub subtype: AccountSubtype,
+    pub status: AccountStatus,
+    pub currency: String,
+    pub description: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub balance_paisa: i64,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct PostingInput {
     pub account_id: AccountId,
     pub amount_paisa: i64,
@@ -596,6 +665,11 @@ pub struct SaveBudgetRequest {
     pub end_date: DateTime<Utc>,
     pub categories: Vec<CategoryBudgetInput>,
     pub description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteBudgetRequest {
+    pub id: Uuid,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1238,7 +1312,28 @@ pub fn handle_request(mut request: Request, state: &ServerState) {
         ("GET", "/api/accounts") => {
             let db = state.db.lock().unwrap();
             let accounts = db.list_accounts().unwrap_or_default();
-            let json = serde_json::to_string(&accounts).unwrap_or_else(|_| "[]".into());
+            let accounts_with_balances: Vec<AccountWithBalance> = accounts
+                .into_iter()
+                .map(|acc| {
+                    let balance_paisa = db
+                        .get_account_balance(acc.id)
+                        .map(|m| m.as_paisa())
+                        .unwrap_or(0);
+                    AccountWithBalance {
+                        id: acc.id,
+                        name: acc.name,
+                        account_type: acc.account_type,
+                        subtype: acc.subtype,
+                        status: acc.status,
+                        currency: acc.currency,
+                        description: acc.description,
+                        created_at: acc.created_at,
+                        updated_at: acc.updated_at,
+                        balance_paisa,
+                    }
+                })
+                .collect();
+            let json = serde_json::to_string(&accounts_with_balances).unwrap_or_else(|_| "[]".into());
             (StatusCode(200), "application/json", json)
         }
 
@@ -1337,6 +1432,33 @@ pub fn handle_request(mut request: Request, state: &ServerState) {
                         }
                     } else {
                         (StatusCode(422), "application/json", r#"{"error":"Invalid status"}"#.to_string())
+                    }
+                }
+                Err(e) => (StatusCode(400), "application/json", format!(r#"{{"error":"Malformed JSON: {e}"}}"#)),
+            },
+            Err((s, b)) => (s, "application/json", b),
+        },
+
+        ("POST", "/api/accounts/update") => match read_body(&mut request, MAX_JSON_PAYLOAD_BYTES) {
+            Ok(body) => match serde_json::from_slice::<UpdateAccountDetailsRequest>(&body) {
+                Ok(req) => {
+                    let db = state.db.lock().unwrap();
+                    match db.update_account_details(req.account_id, req.name.trim(), req.description.as_deref().map(str::trim)) {
+                        Ok(_) => {
+                            let prev_events = db.list_audit_events().unwrap_or_default();
+                            let seq = prev_events.len() as u64 + 1;
+                            let prev_hash = prev_events.last().map(|e| e.hash).unwrap_or([0u8; 32]);
+                            let audit = create_audit_event(
+                                seq,
+                                prev_hash,
+                                AuditEventType::AccountStatusChanged,
+                                &req.account_id.to_string(),
+                                &format!("Account '{}' updated", req.name),
+                            );
+                            let _ = db.append_audit_event(&audit);
+                            (StatusCode(200), "application/json", r#"{"success":true}"#.to_string())
+                        }
+                        Err(e) => (StatusCode(500), "application/json", format!(r#"{{"error":"{e}"}}"#)),
                     }
                 }
                 Err(e) => (StatusCode(400), "application/json", format!(r#"{{"error":"Malformed JSON: {e}"}}"#)),
@@ -1636,6 +1758,22 @@ pub fn handle_request(mut request: Request, state: &ServerState) {
                             }
                             Err(e) => (StatusCode(500), "application/json", format!(r#"{{"error":"Failed saving budget: {e}"}}"#)),
                         }
+                    }
+                }
+                Err(e) => (StatusCode(400), "application/json", format!(r#"{{"error":"Malformed JSON: {e}"}}"#)),
+            },
+            Err((s, b)) => (s, "application/json", b),
+        },
+
+        ("POST", "/api/budgets/delete") => match read_body(&mut request, MAX_JSON_PAYLOAD_BYTES) {
+            Ok(body) => match serde_json::from_slice::<DeleteBudgetRequest>(&body) {
+                Ok(req) => {
+                    let db = state.db.lock().unwrap();
+                    match db.delete_budget(req.id) {
+                        Ok(deleted) => {
+                            (StatusCode(200), "application/json", format!(r#"{{"success":{deleted}}}"#))
+                        }
+                        Err(e) => (StatusCode(500), "application/json", format!(r#"{{"error":"{e}"}}"#)),
                     }
                 }
                 Err(e) => (StatusCode(400), "application/json", format!(r#"{{"error":"Malformed JSON: {e}"}}"#)),
@@ -2009,6 +2147,30 @@ pub fn handle_request(mut request: Request, state: &ServerState) {
                 Ok(new_settings) => {
                     let mut s = state.settings.lock().unwrap();
                     *s = new_settings.clone();
+
+                    let db = state.db.lock().unwrap();
+                    let conn = db.connection();
+                    let now_str = Utc::now().to_rfc3339();
+                    let _ = conn.execute(
+                        "INSERT INTO app_settings (id, currency, theme, auto_lock_minutes, offline_mode, financial_year_start, updated_at)
+                         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+                         ON CONFLICT(id) DO UPDATE SET
+                            currency = excluded.currency,
+                            theme = excluded.theme,
+                            auto_lock_minutes = excluded.auto_lock_minutes,
+                            offline_mode = excluded.offline_mode,
+                            financial_year_start = excluded.financial_year_start,
+                            updated_at = excluded.updated_at;",
+                        bhoot_db::rusqlite::params![
+                            new_settings.currency,
+                            new_settings.theme,
+                            new_settings.auto_lock_minutes,
+                            new_settings.offline_mode as i64,
+                            new_settings.financial_year_start,
+                            now_str
+                        ],
+                    );
+
                     let json = serde_json::to_string(&new_settings).unwrap_or_else(|_| "{}".into());
                     (StatusCode(200), "application/json", json)
                 }
@@ -2045,18 +2207,30 @@ pub fn handle_request(mut request: Request, state: &ServerState) {
 
 pub fn run_server(port: u16, state: Arc<ServerState>) -> Result<(), Box<dyn std::error::Error>> {
     let addr = format!("127.0.0.1:{port}");
-    let server = Server::http(&addr).map_err(|e| format!("Failed to bind to {addr}: {e}"))?;
+    let server = Arc::new(Server::http(&addr).map_err(|e| format!("Failed to bind to {addr}: {e}"))?);
 
     println!("========================================================================");
     println!(" [BHOOT OS] Desktop Application Server Online");
     println!(" Address: http://{addr}");
     println!(" Mode: Airgapped Localhost Only (Binding to 127.0.0.1)");
+    println!(" Concurrency: Multi-threaded Worker Pool (8 workers)");
     println!(" Security: Strict Content-Security-Policy & Frame-Options Denied");
     println!(" Cryptography: Argon2id Authentication, SQLCipher 4.5.x, AES-256-GCM Vault");
     println!("========================================================================");
 
-    for request in server.incoming_requests() {
-        handle_request(request, &state);
+    let mut workers = Vec::new();
+    for _ in 0..8 {
+        let server = server.clone();
+        let state = state.clone();
+        workers.push(std::thread::spawn(move || {
+            while let Ok(request) = server.recv() {
+                handle_request(request, &state);
+            }
+        }));
+    }
+
+    for w in workers {
+        let _ = w.join();
     }
 
     Ok(())

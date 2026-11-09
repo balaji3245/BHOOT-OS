@@ -2,13 +2,19 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api/client';
 import { Account, AccountSubtype, AccountType } from '../types';
 import { formatINR } from '../utils/format';
-import { Plus, X, Building2, CreditCard, PiggyBank, Briefcase, Archive } from 'lucide-react';
+import { Plus, X, Building2, CreditCard, PiggyBank, Briefcase, Archive, Edit2, CheckCircle2, AlertTriangle } from 'lucide-react';
 
 export const AccountsView: React.FC = () => {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [balances, setBalances] = useState<Record<string, number>>({});
   const [modalOpen, setModalOpen] = useState(false);
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editingAccount, setEditingAccount] = useState<Account | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editDescription, setEditDescription] = useState('');
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   // New Account Form
   const [name, setName] = useState('');
@@ -19,15 +25,17 @@ export const AccountsView: React.FC = () => {
 
   const loadData = async () => {
     try {
+      setErrorMsg(null);
       const accs = await api.getAccounts();
       setAccounts(accs);
       const bals: Record<string, number> = {};
       for (const a of accs) {
-        bals[a.id] = await api.getAccountBalance(a.id);
+        bals[a.id] = a.balance_paisa ?? 0;
       }
       setBalances(bals);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to load accounts:', err);
+      setErrorMsg(err.message || 'Failed to load chart of accounts');
     } finally {
       setLoading(false);
     }
@@ -41,6 +49,7 @@ export const AccountsView: React.FC = () => {
     e.preventDefault();
     if (!name.trim()) return;
     setIsSubmitting(true);
+    setErrorMsg(null);
     try {
       await api.createAccount({
         name: name.trim(),
@@ -52,9 +61,37 @@ export const AccountsView: React.FC = () => {
       setModalOpen(false);
       setName('');
       setDescription('');
+      setSuccessMsg(`Account "${name.trim()}" created successfully.`);
+      setTimeout(() => setSuccessMsg(null), 3500);
       await loadData();
     } catch (err: any) {
-      alert(`Failed to create account: ${err.message}`);
+      setErrorMsg(`Failed to create account: ${err.message}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleOpenEdit = (acc: Account) => {
+    setEditingAccount(acc);
+    setEditName(acc.name);
+    setEditDescription(acc.description || '');
+    setEditModalOpen(true);
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingAccount || !editName.trim()) return;
+    setIsSubmitting(true);
+    setErrorMsg(null);
+    try {
+      await api.updateAccount(editingAccount.id, editName.trim(), editDescription.trim() || undefined);
+      setEditModalOpen(false);
+      setEditingAccount(null);
+      setSuccessMsg(`Account "${editName.trim()}" updated successfully.`);
+      setTimeout(() => setSuccessMsg(null), 3500);
+      await loadData();
+    } catch (err: any) {
+      setErrorMsg(`Failed to update account: ${err.message}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -62,11 +99,14 @@ export const AccountsView: React.FC = () => {
 
   const handleToggleStatus = async (account: Account) => {
     const nextStatus = account.status === 'Active' ? 'Archived' : 'Active';
+    setErrorMsg(null);
     try {
       await api.updateAccountStatus(account.id, nextStatus as 'Active' | 'Archived');
+      setSuccessMsg(`Account status changed to ${nextStatus}.`);
+      setTimeout(() => setSuccessMsg(null), 3000);
       await loadData();
     } catch (err: any) {
-      alert(`Failed to update status: ${err.message}`);
+      setErrorMsg(`Failed to update status: ${err.message}`);
     }
   };
 
@@ -116,6 +156,20 @@ export const AccountsView: React.FC = () => {
         </button>
       </div>
 
+      {successMsg && (
+        <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg flex items-center space-x-2 text-xs text-emerald-400">
+          <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+          <span>{successMsg}</span>
+        </div>
+      )}
+
+      {errorMsg && (
+        <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg flex items-center space-x-2 text-xs text-red-400">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          <span>{errorMsg}</span>
+        </div>
+      )}
+
       <div className="space-y-6">
         {types.map((t) => {
           const accs = accounts.filter((a) => a.account_type === t);
@@ -161,6 +215,13 @@ export const AccountsView: React.FC = () => {
                         >
                           {a.status}
                         </span>
+                        <button
+                          onClick={() => handleOpenEdit(a)}
+                          title="Edit account details"
+                          className="p-1 text-neutral-500 hover:text-white rounded transition"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
                         <button
                           onClick={() => handleToggleStatus(a)}
                           title={a.status === 'Active' ? 'Archive account' : 'Reactivate account'}
@@ -273,6 +334,69 @@ export const AccountsView: React.FC = () => {
                   className="px-4 py-2 bg-white hover:bg-neutral-200 disabled:opacity-50 text-black text-xs font-semibold rounded-lg shadow-sm transition"
                 >
                   {isSubmitting ? 'Creating...' : 'Create Account'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Edit Account */}
+      {editModalOpen && editingAccount && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="bg-[#111111] border border-[#222222] rounded-xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-[#222222] pb-3">
+              <h3 className="text-base font-bold text-white">Edit Account Details</h3>
+              <button
+                onClick={() => {
+                  setEditModalOpen(false);
+                  setEditingAccount(null);
+                }}
+                className="text-neutral-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEdit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-neutral-300 mb-1">Account Name</label>
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full bg-[#181818] border border-[#333333] text-xs rounded-lg p-2.5 text-white focus:border-white focus:outline-none"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-neutral-300 mb-1">Description / Notes</label>
+                <input
+                  type="text"
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  className="w-full bg-[#181818] border border-[#333333] text-xs rounded-lg p-2.5 text-white focus:border-white focus:outline-none"
+                />
+              </div>
+
+              <div className="flex justify-end space-x-3 pt-3 border-t border-[#222222]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditModalOpen(false);
+                    setEditingAccount(null);
+                  }}
+                  className="px-4 py-2 bg-[#181818] border border-[#333333] text-white text-xs font-semibold rounded-lg hover:bg-[#222222] transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="px-4 py-2 bg-white hover:bg-neutral-200 disabled:opacity-50 text-black text-xs font-semibold rounded-lg shadow-sm transition"
+                >
+                  {isSubmitting ? 'Saving...' : 'Save Changes'}
                 </button>
               </div>
             </form>

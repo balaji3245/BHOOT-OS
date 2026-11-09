@@ -29,12 +29,15 @@ export const App: React.FC = () => {
   const [enrollConfirmPin, setEnrollConfirmPin] = useState('');
   const [enrollError, setEnrollError] = useState<string | null>(null);
   const [isEnrolling, setIsEnrolling] = useState(false);
+  const [autoLockMinutes, setAutoLockMinutes] = useState(15);
 
   const lastActivityRef = useRef<number>(Date.now());
   const pinInputRef = useRef<string>('');
   pinInputRef.current = pinInput;
   const isEnrolledRef = useRef<boolean | null>(isEnrolled);
   isEnrolledRef.current = isEnrolled;
+  const autoLockMinutesRef = useRef<number>(15);
+  autoLockMinutesRef.current = autoLockMinutes;
 
   // Check initial security status & token validity
   useEffect(() => {
@@ -51,6 +54,16 @@ export const App: React.FC = () => {
             setIsLocked(true);
           } else {
             setIsLocked(false);
+            // Load user preferences for session timeout
+            try {
+              const s = await api.getSettings();
+              if (s && s.auto_lock_minutes) {
+                setAutoLockMinutes(s.auto_lock_minutes);
+                autoLockMinutesRef.current = s.auto_lock_minutes;
+              }
+            } catch {
+              // ignore
+            }
           }
         }
       } catch {
@@ -122,10 +135,11 @@ export const App: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown, { passive: true });
     window.addEventListener('click', recordActivity, { passive: true });
 
-    // Auto-lock interval (checks every 30s; locks if inactive > 15m)
+    // Auto-lock interval (checks every 30s; locks if inactive > configured autoLockMinutes)
     const interval = setInterval(async () => {
       const inactiveMinutes = (Date.now() - lastActivityRef.current) / 60000;
-      if (inactiveMinutes >= 15 && !isLocked) {
+      const timeoutLimit = autoLockMinutesRef.current || 15;
+      if (inactiveMinutes >= timeoutLimit && !isLocked) {
         await api.lockSession();
         if (mounted) setIsLocked(true);
       }
@@ -341,6 +355,11 @@ export const App: React.FC = () => {
     );
   }
 
+  const handleOpenTxModal = () => {
+    setActiveTab('transactions');
+    setTxModalOpen(true);
+  };
+
   return (
     <div className="flex h-screen bg-[#050505] text-neutral-100 overflow-hidden font-sans">
       {/* Navigation Sidebar */}
@@ -352,13 +371,13 @@ export const App: React.FC = () => {
 
       {/* Main View Area */}
       <div className="flex-1 flex flex-col h-screen overflow-hidden bg-[#050505]">
-        <Navbar onOpenQuickTx={() => setTxModalOpen(true)} />
+        <Navbar onOpenQuickTx={handleOpenTxModal} />
 
         <main className="flex-1 overflow-y-auto">
           {activeTab === 'dashboard' && (
             <DashboardView
               onNavigate={setActiveTab}
-              onOpenTxModal={() => setTxModalOpen(true)}
+              onOpenTxModal={handleOpenTxModal}
             />
           )}
           {activeTab === 'transactions' && (

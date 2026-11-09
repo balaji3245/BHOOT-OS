@@ -30,6 +30,7 @@ export interface Account {
   description?: string;
   created_at: string;
   updated_at: string;
+  balance_paisa?: number;
 }
 
 export type Direction = 'Debit' | 'Credit';

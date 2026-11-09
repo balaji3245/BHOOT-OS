@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api/client';
-import { Moon, DollarSign, Info, Shield, Clock, CheckCircle2 } from 'lucide-react';
+import { Moon, DollarSign, Info, Shield, Clock, CheckCircle2, AlertTriangle } from 'lucide-react';
 
 export const SettingsView: React.FC = () => {
   const [currency, setCurrency] = useState('INR');
@@ -8,6 +8,7 @@ export const SettingsView: React.FC = () => {
   const [autoLockMinutes, setAutoLockMinutes] = useState(15);
   const [financialYearStart, setFinancialYearStart] = useState('04-01');
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -18,8 +19,9 @@ export const SettingsView: React.FC = () => {
         setTheme(s.theme || 'dark');
         setAutoLockMinutes(s.auto_lock_minutes || 15);
         setFinancialYearStart(s.financial_year_start || '04-01');
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to load settings:', err);
+        setErrorMsg(err.message || 'Failed to load system settings');
       } finally {
         setLoading(false);
       }
@@ -29,6 +31,7 @@ export const SettingsView: React.FC = () => {
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
+    setErrorMsg(null);
     try {
       await api.updateSettings({
         currency,
@@ -40,7 +43,7 @@ export const SettingsView: React.FC = () => {
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 3000);
     } catch (err: any) {
-      alert(`Failed to save settings: ${err.message}`);
+      setErrorMsg(`Failed to save settings: ${err.message}`);
     }
   };
 
@@ -67,6 +70,13 @@ export const SettingsView: React.FC = () => {
         <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg flex items-center space-x-2 text-xs text-emerald-400">
           <CheckCircle2 className="w-4 h-4" />
           <span>Settings saved to persistent offline configuration!</span>
+        </div>
+      )}
+
+      {errorMsg && (
+        <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg flex items-center space-x-2 text-xs text-red-400">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          <span>{errorMsg}</span>
         </div>
       )}
 

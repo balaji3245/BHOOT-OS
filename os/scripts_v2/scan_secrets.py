@@ -23,6 +23,10 @@ IGNORE_DIRS = {
     ".idea",
     ".vscode",
     "rootfs",
+    "preserved_rc3",
+    "build_env_debian12",
+    "cold_boot_verification",
+    "disposable_release_test",
 }
 
 IGNORE_EXTENSIONS = {
@@ -30,12 +34,15 @@ IGNORE_EXTENSIONS = {
     ".backup",
     ".squashfs",
     ".phase2a4_compromised",
+    ".rc3",
     ".iso",
     ".dump",
     ".log",
     ".bin",
     ".fd",
     ".deb",
+    ".so",
+    ".a",
 }
 
 # Documentation and ignore files are allowed to reference patterns

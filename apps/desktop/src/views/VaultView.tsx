@@ -11,6 +11,7 @@ import {
   CheckCircle,
   Trash2,
   Loader2,
+  X,
 } from 'lucide-react';
 
 export const VaultView: React.FC = () => {
@@ -21,6 +22,8 @@ export const VaultView: React.FC = () => {
   const [dragActive, setDragActive] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
+  const [auditError, setAuditError] = useState<string | null>(null);
+  const [docToDelete, setDocToDelete] = useState<{ id: string; filename: string } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -39,11 +42,12 @@ export const VaultView: React.FC = () => {
 
   const handleRunAudit = async () => {
     setVerifying(true);
+    setAuditError(null);
     try {
       const rep = await api.verifyVaultIntegrity();
       setIntegrityReport(rep);
     } catch (err: any) {
-      alert(`Integrity verification failed: ${err.message}`);
+      setAuditError(`Integrity verification failed: ${err.message}`);
     } finally {
       setVerifying(false);
     }
@@ -133,19 +137,24 @@ export const VaultView: React.FC = () => {
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
     } catch (err: any) {
-      alert(`Export failed: ${err.message}`);
+      setUploadError(`Export failed: ${err.message}`);
     }
   };
 
-  const handleDelete = async (id: string, filename: string) => {
-    if (!confirm(`Permanently shred and delete "${filename}" from encrypted vault?`)) {
-      return;
-    }
+  const handleDelete = (id: string, filename: string) => {
+    setDocToDelete({ id, filename });
+  };
+
+  const confirmDelete = async () => {
+    if (!docToDelete) return;
     try {
-      await api.deleteVaultDocument(id);
+      await api.deleteVaultDocument(docToDelete.id);
+      setUploadSuccess(`Document "${docToDelete.filename}" shredded and permanently removed.`);
+      setTimeout(() => setUploadSuccess(null), 3500);
+      setDocToDelete(null);
       await loadData();
     } catch (err: any) {
-      alert(`Delete failed: ${err.message}`);
+      setUploadError(`Delete failed: ${err.message}`);
     }
   };
 
@@ -183,6 +192,13 @@ export const VaultView: React.FC = () => {
           <span>{verifying ? 'Auditing Digests...' : 'Verify Vault Integrity'}</span>
         </button>
       </div>
+
+      {auditError && (
+        <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg flex items-center space-x-2 text-xs text-red-400">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          <span>{auditError}</span>
+        </div>
+      )}
 
       {/* Audit Banner */}
       {integrityReport && (
@@ -320,6 +336,41 @@ export const VaultView: React.FC = () => {
           </table>
         </div>
       </div>
+
+      {/* Modal: Delete Confirmation */}
+      {docToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="bg-[#111111] border border-[#222222] rounded-xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-[#222222] pb-3">
+              <h3 className="text-base font-bold text-white">Permanently Delete Document</h3>
+              <button onClick={() => setDocToDelete(null)} className="text-neutral-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-neutral-400 leading-relaxed">
+              Are you sure you want to permanently shred and delete <span className="text-white font-semibold">"{docToDelete.filename}"</span>? This will zeroize and unlink its encrypted ciphertext from storage.
+            </p>
+
+            <div className="flex justify-end space-x-3 pt-3 border-t border-[#222222]">
+              <button
+                type="button"
+                onClick={() => setDocToDelete(null)}
+                className="px-4 py-2 bg-[#181818] border border-[#333333] text-white text-xs font-semibold rounded-lg hover:bg-[#222222] transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDelete}
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded-lg shadow-sm transition"
+              >
+                Permanently Shred
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

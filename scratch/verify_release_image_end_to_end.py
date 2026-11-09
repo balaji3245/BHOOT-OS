@@ -194,9 +194,13 @@ def main():
         # Stage 1: OVMF / GRUB Bootloader Menu
         log("Waiting for GRUB bootloader menu...")
         idx = child.expect(["GNU GRUB", "Loading BHOOT Linux Kernel", "Please unlock disk", pexpect.TIMEOUT], timeout=40)
-        log(f"Stage 1/2 match (idx={idx})")
+        log(f"Stage 1 match (idx={idx})")
         time.sleep(1)
         qmp.screendump(os.path.join(SCREENSHOT_DIR, "01_uefi_grub_boot.png"))
+
+        # Select Headless Serial Diagnostic Mode (Entry 3: down, down, down, enter) for serial test harness
+        log("Selecting BHOOT Headless Serial Diagnostic Mode via QMP...")
+        qmp.send_keys(["down", "down", "down", "ret"], delay=0.25)
 
         # Stage 2: Early-Boot LUKS Passphrase Prompt
         log("Waiting for LUKS passphrase prompt...")

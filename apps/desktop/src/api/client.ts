@@ -179,21 +179,27 @@ export const api = {
     });
   },
 
+  async updateAccount(accountId: string, name: string, description?: string): Promise<void> {
+    await httpRequest('POST', '/api/accounts/update', {
+      account_id: accountId,
+      name,
+      description,
+    });
+  },
+
   async getAccountBalance(accountId: string): Promise<number> {
     const accounts = await this.getAccounts();
     const acc = accounts.find((a) => a.id === accountId);
     if (!acc) return 0;
-    // Calculate balance from balance sheet
-    const bs = await this.getBalanceSheet();
-    const allItems = [...bs.assets, ...bs.liabilities, ...bs.equity];
-    const item = allItems.find((i) => i.account_id === accountId);
-    if (item) return item.balance_paisa ?? 0;
-    // Check income statement for Income / Expense accounts
+    if (acc.balance_paisa !== undefined) {
+      return acc.balance_paisa;
+    }
+    // Fallback: calculate from balance sheet
     try {
-      const is = await this.getIncomeStatement();
-      const incExp = [...is.operating_income, ...is.operating_expenses];
-      const ieItem = incExp.find((i) => i.account_id === accountId);
-      if (ieItem) return ieItem.balance_paisa ?? 0;
+      const bs = await this.getBalanceSheet();
+      const allItems = [...bs.assets, ...bs.liabilities, ...bs.equity];
+      const item = allItems.find((i) => i.account_id === accountId);
+      if (item) return item.balance_paisa ?? 0;
     } catch {
       // ignore
     }
@@ -272,6 +278,10 @@ export const api = {
 
   async evaluateBudget(id: string): Promise<BudgetReport | null> {
     return httpRequest<BudgetReport | null>('GET', `/api/budgets/evaluate?id=${encodeURIComponent(id)}`);
+  },
+
+  async deleteBudget(id: string): Promise<void> {
+    await httpRequest('POST', '/api/budgets/delete', { id });
   },
 
   // Financial Reports

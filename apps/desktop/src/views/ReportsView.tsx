@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { api } from '../api/client';
 import { BalanceSheet, CashFlowStatement, IncomeStatement } from '../types';
 import { formatINR, formatDate } from '../utils/format';
-import { Download, CheckCircle2, Layers, TrendingUp, DollarSign } from 'lucide-react';
+import { Download, CheckCircle2, Layers, TrendingUp, DollarSign, Calendar, RefreshCw, AlertTriangle } from 'lucide-react';
 
 export const ReportsView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'bs' | 'pnl' | 'cfs'>('bs');
@@ -10,27 +10,63 @@ export const ReportsView: React.FC = () => {
   const [incomeStatement, setIncomeStatement] = useState<IncomeStatement | null>(null);
   const [cashFlow, setCashFlow] = useState<CashFlowStatement | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const [fromDate, setFromDate] = useState(() => {
+    const d = new Date(Date.now() - 30 * 86400000);
+    return d.toISOString().split('T')[0];
+  });
+  const [toDate, setToDate] = useState(() => {
+    return new Date().toISOString().split('T')[0];
+  });
+
+  const loadStatements = useCallback(async (fromStr: string, toStr: string) => {
+    setIsRefreshing(true);
+    setErrorMsg(null);
+    try {
+      const fromIso = new Date(`${fromStr}T00:00:00Z`).toISOString();
+      const toIso = new Date(`${toStr}T23:59:59Z`).toISOString();
+
+      const [bs, pnl, cfs] = await Promise.all([
+        api.getBalanceSheet(toIso),
+        api.getIncomeStatement(fromIso, toIso),
+        api.getCashFlowStatement(fromIso, toIso),
+      ]);
+
+      setBalanceSheet(bs);
+      setIncomeStatement(pnl);
+      setCashFlow(cfs);
+    } catch (err: any) {
+      console.error('Failed to load financial statements:', err);
+      setErrorMsg(err.message || 'Failed to generate financial statements');
+    } finally {
+      setLoading(false);
+      setIsRefreshing(false);
+    }
+  }, []);
 
   useEffect(() => {
-    async function load() {
-      try {
-        const bs = await api.getBalanceSheet();
-        const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString();
-        const now = new Date().toISOString();
-        const pnl = await api.getIncomeStatement(thirtyDaysAgo, now);
-        const cfs = await api.getCashFlowStatement(thirtyDaysAgo, now);
+    loadStatements(fromDate, toDate);
+  }, [loadStatements, fromDate, toDate]);
 
-        setBalanceSheet(bs);
-        setIncomeStatement(pnl);
-        setCashFlow(cfs);
-      } catch (err) {
-        console.error('Failed to load financial statements:', err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, []);
+  const setPreset = (days: number) => {
+    const now = new Date();
+    const past = new Date(Date.now() - days * 86400000);
+    const to = now.toISOString().split('T')[0];
+    const from = past.toISOString().split('T')[0];
+    setFromDate(from);
+    setToDate(to);
+  };
+
+  const setYtdPreset = () => {
+    const now = new Date();
+    const year = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+    const from = `${year}-04-01`;
+    const to = now.toISOString().split('T')[0];
+    setFromDate(from);
+    setToDate(to);
+  };
 
   const handleExportReportCsv = () => {
     let csv = '';
@@ -93,6 +129,60 @@ export const ReportsView: React.FC = () => {
           <Download className="w-3.5 h-3.5" />
           <span>Export Active Statement</span>
         </button>
+      </div>
+
+      {errorMsg && (
+        <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg flex items-center space-x-2 text-xs text-red-400">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          <span>{errorMsg}</span>
+        </div>
+      )}
+
+      {/* Date Range & Reporting Period Toolbar */}
+      <div className="p-4 rounded-xl bg-[#111111] border border-[#222222] flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center space-x-2">
+          <Calendar className="w-4 h-4 text-neutral-400" />
+          <span className="text-xs font-semibold text-neutral-300 uppercase tracking-wider">Report Window:</span>
+          <div className="flex items-center space-x-2">
+            <input
+              type="date"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+              className="bg-[#181818] border border-[#333333] text-xs rounded-lg px-2.5 py-1.5 text-white font-mono focus:border-white focus:outline-none"
+            />
+            <span className="text-neutral-500 text-xs">to</span>
+            <input
+              type="date"
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+              className="bg-[#181818] border border-[#333333] text-xs rounded-lg px-2.5 py-1.5 text-white font-mono focus:border-white focus:outline-none"
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={() => setPreset(30)}
+            className="px-2.5 py-1 bg-[#181818] hover:bg-[#222222] text-neutral-300 hover:text-white text-xs rounded border border-[#333333] transition"
+          >
+            Last 30D
+          </button>
+          <button
+            onClick={() => setPreset(90)}
+            className="px-2.5 py-1 bg-[#181818] hover:bg-[#222222] text-neutral-300 hover:text-white text-xs rounded border border-[#333333] transition"
+          >
+            Last 90D
+          </button>
+          <button
+            onClick={setYtdPreset}
+            className="px-2.5 py-1 bg-[#181818] hover:bg-[#222222] text-neutral-300 hover:text-white text-xs rounded border border-[#333333] transition"
+          >
+            Fiscal YTD
+          </button>
+          {isRefreshing && (
+            <RefreshCw className="w-3.5 h-3.5 text-neutral-400 animate-spin ml-2" />
+          )}
+        </div>
       </div>
 
       {/* Tabs */}

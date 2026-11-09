@@ -9,6 +9,9 @@ export const BudgetsView: React.FC = () => {
   const [activeBudgetReport, setActiveBudgetReport] = useState<BudgetReport | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
 
   // New Budget Form
   const [budgetName, setBudgetName] = useState('');
@@ -24,6 +27,7 @@ export const BudgetsView: React.FC = () => {
 
   const loadData = async () => {
     try {
+      setErrorMsg(null);
       const bgts = await api.getBudgets();
       setBudgets(bgts);
       if (bgts.length > 0) {
@@ -32,8 +36,9 @@ export const BudgetsView: React.FC = () => {
       } else {
         setActiveBudgetReport(null);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to load budgets:', err);
+      setErrorMsg(err.message || 'Failed to load budgets');
     } finally {
       setLoading(false);
     }
@@ -46,6 +51,17 @@ export const BudgetsView: React.FC = () => {
   const handleSelectBudget = async (id: string) => {
     const rep = await api.evaluateBudget(id);
     setActiveBudgetReport(rep);
+  };
+
+  const handleDeleteBudget = async (id: string) => {
+    try {
+      await api.deleteBudget(id);
+      setSuccessMsg('Budget deleted successfully.');
+      setTimeout(() => setSuccessMsg(null), 3000);
+      await loadData();
+    } catch (err: any) {
+      setErrorMsg(`Failed to delete budget: ${err.message}`);
+    }
   };
 
   const handleAddCategoryRow = () => {
@@ -68,6 +84,7 @@ export const BudgetsView: React.FC = () => {
     if (!budgetName.trim()) return;
 
     setIsSubmitting(true);
+    setModalError(null);
     try {
       const now = new Date();
       const end = new Date(now.getTime() + 30 * 86400000);
@@ -88,9 +105,11 @@ export const BudgetsView: React.FC = () => {
 
       setModalOpen(false);
       setBudgetName('');
+      setSuccessMsg(`Budget "${budgetName.trim()}" created successfully.`);
+      setTimeout(() => setSuccessMsg(null), 3000);
       await loadData();
     } catch (err: any) {
-      alert(`Failed to save budget: ${err.message}`);
+      setModalError(`Failed to save budget: ${err.message}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -116,13 +135,30 @@ export const BudgetsView: React.FC = () => {
           </p>
         </div>
         <button
-          onClick={() => setModalOpen(true)}
+          onClick={() => {
+            setModalError(null);
+            setModalOpen(true);
+          }}
           className="flex items-center space-x-1.5 px-4 py-2 bg-white hover:bg-neutral-200 text-black text-xs font-semibold rounded-lg shadow-sm transition"
         >
           <Plus className="w-4 h-4" />
           <span>New Budget Plan</span>
         </button>
       </div>
+
+      {successMsg && (
+        <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg flex items-center space-x-2 text-xs text-emerald-400">
+          <CheckCircle className="w-4 h-4 flex-shrink-0" />
+          <span>{successMsg}</span>
+        </div>
+      )}
+
+      {errorMsg && (
+        <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg flex items-center space-x-2 text-xs text-red-400">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          <span>{errorMsg}</span>
+        </div>
+      )}
 
       {/* Active Budget Selector */}
       {budgets.length > 1 && (
@@ -149,11 +185,20 @@ export const BudgetsView: React.FC = () => {
           {/* Top Progress Overview Card */}
           <div className="p-6 rounded-xl bg-[#111111] border border-[#222222] space-y-4">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-              <div>
-                <h3 className="text-lg font-bold text-white">{activeBudgetReport.budget_name}</h3>
-                <p className="text-xs text-neutral-400">
-                  Plan Period: <span className="text-white">{activeBudgetReport.period}</span>
-                </p>
+              <div className="flex items-center space-x-3">
+                <div>
+                  <h3 className="text-lg font-bold text-white">{activeBudgetReport.budget_name}</h3>
+                  <p className="text-xs text-neutral-400">
+                    Plan Period: <span className="text-white">{activeBudgetReport.period}</span>
+                  </p>
+                </div>
+                <button
+                  onClick={() => handleDeleteBudget(activeBudgetReport.budget_id)}
+                  title="Delete this budget plan"
+                  className="p-1.5 text-neutral-500 hover:text-red-400 rounded transition ml-2"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
               </div>
               <div className="flex items-center space-x-6 text-xs font-mono">
                 <div>
@@ -297,6 +342,13 @@ export const BudgetsView: React.FC = () => {
             </div>
 
             <form onSubmit={handleCreateBudget} className="space-y-4">
+              {modalError && (
+                <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg flex items-center space-x-2 text-xs text-red-400">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span>{modalError}</span>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-semibold text-neutral-300 mb-1">Plan Name</label>
                 <input

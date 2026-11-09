@@ -29,6 +29,10 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
   const [reversalReason, setReversalReason] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
+  const [reversalError, setReversalError] = useState<string | null>(null);
 
   // New Transaction Form State
   const [txType, setTxType] = useState<TransactionType>('Expense');
@@ -45,12 +49,14 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
 
   const loadData = async () => {
     try {
+      setErrorMsg(null);
       const txs = await api.getTransactions(200, 0);
       const accs = await api.getAccounts();
       setTransactions(txs);
       setAccounts(accs);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to load transactions:', err);
+      setErrorMsg(err.message || 'Failed to load transactions');
     } finally {
       setLoading(false);
     }
@@ -89,8 +95,9 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
 
   const handleSubmitTx = async (e: React.FormEvent) => {
     e.preventDefault();
+    setModalError(null);
     if (!isBalanced) {
-      alert('Transaction must be strictly balanced before posting (Debits must equal Credits).');
+      setModalError('Transaction must be strictly balanced before posting (Debits must equal Credits).');
       return;
     }
 
@@ -120,9 +127,11 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
       setCategory('');
       setRefNumber('');
       setNotes('');
+      setSuccessMsg('Balanced transaction successfully posted to immutable ledger.');
+      setTimeout(() => setSuccessMsg(null), 3500);
       await loadData();
     } catch (err: any) {
-      alert(`Error posting transaction: ${err.message}`);
+      setModalError(`Error posting transaction: ${err.message}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -131,13 +140,16 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
   const handleExecuteReversal = async () => {
     if (!reversalModalTx || !reversalReason.trim()) return;
     setIsSubmitting(true);
+    setReversalError(null);
     try {
       await api.reverseTransaction(reversalModalTx.id, reversalReason.trim());
       setReversalModalTx(null);
       setReversalReason('');
+      setSuccessMsg(`Transaction ${reversalModalTx.id.slice(0, 8)} successfully reversed.`);
+      setTimeout(() => setSuccessMsg(null), 3500);
       await loadData();
     } catch (err: any) {
-      alert(`Reversal failed: ${err.message}`);
+      setReversalError(`Reversal failed: ${err.message}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -196,7 +208,10 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
           </button>
 
           <button
-            onClick={() => setTxModalOpen(true)}
+            onClick={() => {
+              setModalError(null);
+              setTxModalOpen(true);
+            }}
             className="flex items-center space-x-1.5 px-4 py-2 bg-white hover:bg-neutral-200 text-black text-xs font-semibold rounded-lg shadow-sm transition"
           >
             <Plus className="w-4 h-4" />
@@ -204,6 +219,20 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
           </button>
         </div>
       </div>
+
+      {successMsg && (
+        <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg flex items-center space-x-2 text-xs text-emerald-400">
+          <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+          <span>{successMsg}</span>
+        </div>
+      )}
+
+      {errorMsg && (
+        <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg flex items-center space-x-2 text-xs text-red-400">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          <span>{errorMsg}</span>
+        </div>
+      )}
 
       {/* Filter & Search Bar */}
       <div className="flex items-center space-x-3 bg-[#111111] p-3 rounded-lg border border-[#222222]">
@@ -331,6 +360,13 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
             </div>
 
             <form onSubmit={handleSubmitTx} className="space-y-4">
+              {modalError && (
+                <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg flex items-center space-x-2 text-xs text-red-400">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span>{modalError}</span>
+                </div>
+              )}
+
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-neutral-300 mb-1">Type</label>
@@ -534,6 +570,13 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
               Accounting records are append-only. Reversing this transaction will create an inverse entry
               referencing transaction <span className="text-white font-mono">{reversalModalTx.id.slice(0, 8)}...</span>
             </p>
+
+            {reversalError && (
+              <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg flex items-center space-x-2 text-xs text-red-400">
+                <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                <span>{reversalError}</span>
+              </div>
+            )}
 
             <div>
               <label className="block text-xs font-semibold text-neutral-300 mb-1">
