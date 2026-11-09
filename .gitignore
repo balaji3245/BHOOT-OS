@@ -33,6 +33,7 @@ dist-ssr/
 *.session_key*
 .session_key.tmp
 *.phase2a4_compromised
+backups_host/
 .env
 .env.*
 !.env.example
